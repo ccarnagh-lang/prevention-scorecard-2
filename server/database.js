@@ -61,6 +61,7 @@ async function importRosterCSV(csvText, uploadedBy) {
   const firstLine = lines[0].replace(/\r/g, '');
   const delim = firstLine.includes('\t') ? '\t' : ',';
   const headers = firstLine.split(delim).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  const rows = lines.slice(1).map(line => line.replace(/\r/g, '').split(delim));
 
   // Map header positions
   const col = name => {
