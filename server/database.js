@@ -57,9 +57,10 @@ async function importRosterCSV(csvText, uploadedBy) {
   const lines = csvText.trim().split('\n');
   if (lines.length < 2) throw new Error('CSV file appears empty');
 
-  // Detect delimiter
-  const delim = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(delim).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  // Detect delimiter — handle tab, comma, and Windows line endings
+  const firstLine = lines[0].replace(/\r/g, '');
+  const delim = firstLine.includes('\t') ? '\t' : ',';
+  const headers = firstLine.split(delim).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
 
   // Map header positions
   const col = name => {
