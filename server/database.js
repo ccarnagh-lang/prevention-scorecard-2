@@ -125,7 +125,7 @@ const validRows = rows.filter(r => r.length > 3 && get(r, 'conn_case_id') && get
       };
     }
     const cin = get(row, 'cin');
-    if (cin) {
+    if (cin && cin.trim() !== '') {
       caseMap[caseId].children.push({
         child_name:      get(row, 'child_name'),
         child_pid:       get(row, 'child_pid'),
