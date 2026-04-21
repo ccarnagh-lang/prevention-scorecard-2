@@ -20,7 +20,6 @@ app.use(session({
   cookie: { maxAge: 8 * 60 * 60 * 1000, sameSite: 'lax', secure: false },
 }));
 
-// ── MIDDLEWARE ────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
   next();
@@ -44,7 +43,6 @@ function scopeProgram(req, res, next) {
   next();
 }
 
-// ── AUTH ──────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -62,7 +60,6 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/logout', (req, res) => { req.session.destroy(() => res.json({ success: true })); });
 app.get('/api/auth/me', (req, res) => res.json({ user: req.session?.user || null }));
 
-// ── PROGRAMS ──────────────────────────────────────────────────
 app.get('/api/programs', requireAuth, async (req, res) => {
   try {
     let programs = await db.getAllPrograms();
@@ -75,13 +72,11 @@ app.get('/api/programs', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── DASHBOARD ─────────────────────────────────────────────────
 app.get('/api/dashboard', requireAuth, scopeProgram, async (req, res) => {
   try { res.json(await db.getDashboard(req.programScope, req.query.week_ending)); }
   catch(e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
-// ── ROSTER ────────────────────────────────────────────────────
 app.get('/api/roster', requireAuth, scopeProgram, async (req, res) => {
   try { res.json(await db.getRoster(req.programScope, req.query.active !== 'false')); }
   catch(e) { res.status(500).json({ error: e.message }); }
@@ -100,17 +95,14 @@ app.put('/api/roster/:caseId', requireAuth, async (req, res) => {
   catch(e) { res.status(400).json({ error: e.message }); }
 });
 
-// ── CHILDREN ──────────────────────────────────────────────────
 app.get('/api/children/:caseId', requireAuth, async (req, res) => {
   try { res.json(await db.getChildrenForCase(req.params.caseId)); }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/children', requireAuth, scopeProgram, async (req, res) => {
   try { res.json(await db.getAllActiveChildren(req.programScope)); }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/children-compliance', requireAuth, scopeProgram, async (req, res) => {
   try {
     const now   = new Date();
@@ -119,7 +111,6 @@ app.get('/api/children-compliance', requireAuth, scopeProgram, async (req, res) 
     res.json(await db.getChildrenSeenCompliance(req.programScope, month, year));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/children-not-seen', requireAuth, scopeProgram, async (req, res) => {
   try {
     const weekEnding = req.query.week_ending || new Date().toISOString().slice(0,10);
@@ -127,7 +118,6 @@ app.get('/api/children-not-seen', requireAuth, scopeProgram, async (req, res) =>
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── CSV IMPORT ────────────────────────────────────────────────
 app.post('/api/import/roster', requireAuth, requireAdmin,
   upload.single('file'), async (req, res) => {
   try {
@@ -140,7 +130,6 @@ app.post('/api/import/roster', requireAuth, requireAdmin,
   } catch(e) { console.error(e); res.status(400).json({ error: e.message }); }
 });
 
-// ── ENTRIES ───────────────────────────────────────────────────
 app.get('/api/entries', requireAuth, scopeProgram, async (req, res) => {
   try {
     res.json(await db.getEntries({
@@ -155,7 +144,12 @@ app.post('/api/entries', requireAuth, async (req, res) => {
   try {
     const u = req.session.user;
     const entry = req.body;
-    if (u.role !== 'executive' && u.role !== 'admin') entry.program_id = u.program_id;
+    if (!entry.program_id || entry.program_id === '') {
+      entry.program_id = u.program_id;
+    }
+    if (!entry.program_id) {
+      return res.status(400).json({ error: 'No program assigned to your account. Ask your admin to assign you to a program.' });
+    }
     await db.saveEntry(entry, u.id, u.name, u.role);
     res.json({ success: true });
   } catch(e) { console.error(e); res.status(400).json({ error: e.message }); }
@@ -173,7 +167,6 @@ app.get('/api/entries/latest', requireAuth, scopeProgram, async (req, res) => {
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── STAFF ─────────────────────────────────────────────────────
 app.get('/api/staff', requireAuth, scopeProgram, async (req, res) => {
   try {
     const pid = req.programScope || req.session.user.program_id;
@@ -182,7 +175,6 @@ app.get('/api/staff', requireAuth, scopeProgram, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── SUPERVISION LOG ───────────────────────────────────────────
 app.get('/api/supervision-log', requireAuth, scopeProgram, async (req, res) => {
   try { res.json(await db.getSupervisionLog({ programId:req.programScope, staffName:req.query.staff_name, caseId:req.query.case_id })); }
   catch(e) { res.status(500).json({ error: e.message }); }
@@ -201,7 +193,6 @@ app.put('/api/supervision-log/:id/resolve', requireAuth, async (req, res) => {
   catch(e) { res.status(400).json({ error: e.message }); }
 });
 
-// ── EXPORTS ───────────────────────────────────────────────────
 app.get('/api/export/csv', requireAuth, scopeProgram, async (req, res) => {
   try {
     const entries  = await db.getEntries({ programId:req.programScope, dateFrom:req.query.date_from, dateTo:req.query.date_to, limit:10000 });
@@ -212,7 +203,6 @@ app.get('/api/export/csv', requireAuth, scopeProgram, async (req, res) => {
     res.send(csv);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/export/children-compliance', requireAuth, scopeProgram, async (req, res) => {
   try {
     const now   = new Date();
@@ -225,7 +215,6 @@ app.get('/api/export/children-compliance', requireAuth, scopeProgram, async (req
     res.send(csv);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
 app.post('/api/export/supervisory-note', requireAuth, async (req, res) => {
   try {
     const { caseId, ...opts } = req.body;
@@ -240,7 +229,6 @@ app.post('/api/export/supervisory-note', requireAuth, async (req, res) => {
   } catch(e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
-// ── ADMIN ─────────────────────────────────────────────────────
 app.get('/api/admin/users',    requireAdmin, async (req, res) => { try { res.json(await db.getAllUsers()); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/admin/users',   requireAdmin, async (req, res) => {
   try { await db.createUser(req.body); await db.logAction(req.session.user.id,req.session.user.name,'create_user','user',req.body.email,`Role: ${req.body.role}`); res.json({ success:true }); }
@@ -252,7 +240,6 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => { try { awa
 app.get('/api/admin/programs',  requireAdmin, async (req, res) => { try { res.json(await db.getAllPrograms()); } catch(e) { res.status(500).json({error:e.message}); } });
 app.post('/api/admin/programs', requireAdmin, async (req, res) => { try { await db.createProgram(req.body); res.json({success:true}); } catch(e) { res.status(400).json({error:e.message}); } });
 
-// ── UTILITY ROUTES ────────────────────────────────────────────
 app.get('/api/reset-admin', async (req, res) => {
   try {
     const hash  = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'Admin2025', 10);
@@ -282,22 +269,16 @@ app.get('/api/first-setup', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── SPA FALLBACK ──────────────────────────────────────────────
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// ── BOOT ──────────────────────────────────────────────────────
 async function start() {
-  console.log('[boot] Starting server...');
   if (process.env.DATABASE_URL) {
-    console.log('[boot] DATABASE_URL found, running migrations...');
     await migrate();
-    console.log('[boot] Migrations done');
   } else {
     console.warn('[server] No DATABASE_URL — database features unavailable');
   }
-  console.log('[boot] Starting HTTP listener on port', PORT);
   app.listen(PORT, () => {
     console.log(`\nPrevention Scorecard running on port ${PORT}`);
   });
