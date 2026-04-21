@@ -101,7 +101,7 @@ async function importRosterCSV(csvText, uploadedBy) {
 
   // Parse all rows
   const rows = lines.slice(1).map(line => line.split(delim));
-  const validRows = rows.filter(r => r.length > 3 && get(r, 'conn_case_id'));
+const validRows = rows.filter(r => r.length > 3 && get(r, 'conn_case_id') && get(r, 'conn_case_id').trim() !== '');
 
   if (validRows.length === 0) {
     throw new Error(`No valid rows found. Headers detected: [${headers.join(' | ')}]. First data row length: ${rows[0]?.length}. CONN Case ID index: ${headers.indexOf('conn case id')}`);
