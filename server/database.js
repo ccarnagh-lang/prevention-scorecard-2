@@ -207,7 +207,8 @@ const validRows = rows.filter(r => r.length > 3 && get(r, 'conn_case_id') && get
         );
       }
 
-      for (const ch of c.children) {
+       for (const ch of c.children) {
+        if (!ch.cin || !ch.cin.trim() || !c.case_id || !c.case_id.trim()) continue;
         const existingChild = await client.query(
           'SELECT id FROM children WHERE case_id=$1 AND cin=$2',
           [c.case_id, ch.cin]
