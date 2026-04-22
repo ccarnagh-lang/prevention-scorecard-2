@@ -248,14 +248,45 @@ const SharedViews = {
     UI.setTitle('Case List');
     const u = Auth.user;
     const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
-    // Admin/executive see all cases — no program filter
     const dateFrom = ExecViews._dateFrom || '';
     const dateTo   = ExecViews._dateTo   || '';
-    let url = '/api/entries/latest?_=1';
-    if (programId && !isAdminOrExec) url += `&program_id=${encodeURIComponent(programId)}`;
-    if (dateFrom) url += `&date_from=${dateFrom}`;
-    if (dateTo)   url += `&date_to=${dateTo}`;
-    const entries = await API.get(url) || [];
+
+    // Admin/executive: load ALL roster cases + merge with latest entry scores
+    // Others: load latest entries for their program(s)
+    let entries = [];
+    if (isAdminOrExec) {
+      const [roster, latestEntries] = await Promise.all([
+        API.get('/api/roster?active=false') || [],
+        API.get(`/api/entries/latest?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`) || [],
+      ]);
+      const entryMap = {};
+      (latestEntries||[]).forEach(e => { entryMap[e.case_id] = e; });
+      entries = (roster||[]).map(r => ({
+        case_id:       r.case_id,
+        case_name:     r.case_name || '',
+        program_id:    r.program_id || '',
+        case_planner:  r.planner_name || '',
+        week_ending:   entryMap[r.case_id]?.week_ending || '',
+        weekly_score:  entryMap[r.case_id]?.weekly_score ?? null,
+        monthly_score: entryMap[r.case_id]?.monthly_score ?? null,
+        quarterly_score: entryMap[r.case_id]?.quarterly_score ?? null,
+        lifetime_score:  entryMap[r.case_id]?.lifetime_score ?? null,
+        safety_flag:   entryMap[r.case_id]?.safety_flag || 'No',
+        fasp_status:   entryMap[r.case_id]?.fasp_status || 'Pending',
+        reviewed:      entryMap[r.case_id]?.reviewed || false,
+        active:        r.active,
+        manually_assigned: r.manually_assigned,
+        open_date:     r.open_date || '',
+        end_date:      r.end_date || '',
+        has_entry:     !!entryMap[r.case_id],
+      }));
+    } else {
+      let url = '/api/entries/latest?_=1';
+      if (programId) url += `&program_id=${encodeURIComponent(programId)}`;
+      if (dateFrom)  url += `&date_from=${dateFrom}`;
+      if (dateTo)    url += `&date_to=${dateTo}`;
+      entries = await API.get(url) || [];
+    }
 
     // Get all programs for filter dropdown
     const programs = isAdminOrExec ? (await API.get('/api/programs') || []) : [];
@@ -288,7 +319,7 @@ const SharedViews = {
     UI.setContent(`
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Case ID</th><th>Case Name</th><th>Program</th><th>Case Planner</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Reviewed</th><th></th></tr></thead>
+          <thead><tr><th>Case ID</th><th>Case Name</th><th>Program</th><th>Case Planner</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Status</th><th></th></tr></thead>
           <tbody id="case-tbody"></tbody>
         </table>
       </div>`);
@@ -324,16 +355,20 @@ const SharedViews = {
       ? filtered.map(e=>`<tr>
           <td class="mono bold" style="color:#1B3A5C">${e.case_id}</td>
           <td style="font-size:12px">${e.case_name||'—'}</td>
+          <td style="font-size:11px;color:#888">${e.program_id||'—'}${e.manually_assigned?' <span class="badge badge-amber" style="font-size:9px">🔒</span>':''}</td>
           <td>${e.case_planner||'—'}</td>
-          <td style="color:#aaa;font-size:12px">${e.week_ending||'—'}</td>
-          <td>${UI.badge(e.weekly_score)}</td>
-          <td>${UI.badge(e.monthly_score)}</td>
-          <td>${UI.badge(e.quarterly_score)}</td>
-          <td>${UI.badge(e.lifetime_score)}</td>
+          <td style="color:#aaa;font-size:12px">${e.week_ending||'No entries yet'}</td>
+          <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.weekly_score)}</td>
+          <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.monthly_score)}</td>
+          <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.quarterly_score)}</td>
+          <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.lifetime_score)}</td>
           <td>${e.safety_flag==='Yes'?'<span class="badge badge-red">Flag</span>':'<span class="badge badge-gray">—</span>'}</td>
           <td>${UI.faspBadge(e.fasp_status)}</td>
-          <td>${e.reviewed?'<span class="badge badge-green">Reviewed</span>':'<span class="badge badge-gray">Pending</span>'}</td>
-          <td><button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Sup note</button></td>
+          <td>${e.active===false?'<span class="badge badge-gray">Ended</span>':e.has_entry===false?'<span class="badge badge-amber">No entries</span>':'<span class="badge badge-green">Active</span>'}</td>
+          <td style="display:flex;gap:4px">
+            ${(Auth.user?.role==='admin'||Auth.user?.role==='executive')?`<button class="btn btn-xs" onclick="SharedViews.reassignCase('${e.case_id}')">Reassign</button>`:''}
+            <button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Note</button>
+          </td>
         </tr>`).join('')
       : '<tr><td colspan="13" class="empty-state">No cases match filters</td></tr>';
   },
