@@ -37,6 +37,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// Parse comma-separated program IDs into array
 function parsePrograms(programId) {
   if (!programId) return [];
   return programId.split(',').map(p => p.trim()).filter(Boolean);
@@ -87,12 +88,25 @@ app.get('/api/programs', requireAuth, async (req, res) => {
 });
 
 app.get('/api/dashboard', requireAuth, scopeProgram, async (req, res) => {
-  try { res.json(await db.getDashboard(req.programScope, req.programScopes, req.query.week_ending)); }
+  try {
+    res.json(await db.getDashboard(
+      req.programScope, req.programScopes,
+      req.query.week_ending,
+      req.query.date_from || null,
+      req.query.date_to   || null
+    ));
+  }
   catch(e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/roster', requireAuth, scopeProgram, async (req, res) => {
-  try { res.json(await db.getRoster(req.programScope, req.programScopes, req.query.active !== 'false')); }
+  try {
+    const u = req.session.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
+    const progIds = isAdminOrExec ? null : req.programScopes;
+    res.json(await db.getRoster(progId, progIds, req.query.active !== 'false'));
+  }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/roster', requireAuth, requireRole('executive','admin','program_director','supervisor'), async (req, res) => {
@@ -108,9 +122,13 @@ app.post('/api/roster', requireAuth, requireRole('executive','admin','program_di
   } catch(e) { res.status(400).json({ error: e.message }); }
 });
 app.put('/api/roster/:caseId', requireAuth, async (req, res) => {
-  try { await db.updateCase(req.params.caseId, req.body); res.json({ success: true }); }
-  catch(e) { res.status(400).json({ error: e.message }); }
+  try {
+    await db.updateCase(req.params.caseId, req.body);
+    res.json({ success: true });
+  } catch(e) { res.status(400).json({ error: e.message }); }
 });
+
+// Manual reassignment endpoint
 app.post('/api/roster/:caseId/reassign', requireAuth, async (req, res) => {
   try {
     await db.reassignCase(req.params.caseId, req.body, req.session.user);
@@ -189,7 +207,17 @@ app.post('/api/entries/:id/review', requireAuth, requireRole('executive','admin'
   catch(e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/entries/latest', requireAuth, scopeProgram, async (req, res) => {
-  try { res.json(await db.getLatestPerCase(req.programScope, req.programScopes)); }
+  try {
+    const u = req.session.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
+    const progIds = isAdminOrExec ? null : req.programScopes;
+    res.json(await db.getLatestPerCase(
+      progId, progIds,
+      req.query.date_from || null,
+      req.query.date_to   || null
+    ));
+  }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 

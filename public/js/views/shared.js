@@ -246,35 +246,79 @@ const SharedViews = {
   // ── CASE LIST ──────────────────────────────────────────────
   async renderCases(programId) {
     UI.setTitle('Case List');
-    const entries = await API.get('/api/entries/latest'+(programId?`?program_id=${programId}`:''))||[];
+    const u = Auth.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    // Admin/executive see all cases — no program filter
+    const dateFrom = ExecViews._dateFrom || '';
+    const dateTo   = ExecViews._dateTo   || '';
+    let url = '/api/entries/latest?_=1';
+    if (programId && !isAdminOrExec) url += `&program_id=${encodeURIComponent(programId)}`;
+    if (dateFrom) url += `&date_from=${dateFrom}`;
+    if (dateTo)   url += `&date_to=${dateTo}`;
+    const entries = await API.get(url) || [];
+
+    // Get all programs for filter dropdown
+    const programs = isAdminOrExec ? (await API.get('/api/programs') || []) : [];
+
     UI.setTopbar(`
+      ${isAdminOrExec ? `<select id="fl-prog" onchange="SharedViews.filterCases()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+        <option value="">All programs</option>
+        ${programs.map(p=>`<option value="${p.id}">${p.name||p.id}</option>`).join('')}
+      </select>` : ''}
       <select id="fl-planner" onchange="SharedViews.filterCases()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
         <option value="">All planners</option>
-        ${[...new Set(entries.map(e=>e.case_planner).filter(Boolean))].map(p=>`<option>${p}</option>`).join('')}
+        ${[...new Set(entries.map(e=>e.case_planner).filter(Boolean))].sort().map(p=>`<option>${p}</option>`).join('')}
       </select>
       <select id="fl-fasp" onchange="SharedViews.filterCases()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
         <option value="">All FASP</option><option>Current</option><option>Overdue</option><option>Pending</option>
       </select>
-      <input type="text" id="fl-search" oninput="SharedViews.filterCases()" placeholder="Search case ID..." style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">`);
+      <input type="text" id="fl-search" oninput="SharedViews.filterCases()" placeholder="Search case ID or name..." style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+      ${isAdminOrExec ? `<div style="display:flex;align-items:center;gap:3px">
+        <button class="btn btn-xs" onclick="SharedViews.setCaseDatePreset('week')">Week</button>
+        <button class="btn btn-xs" onclick="SharedViews.setCaseDatePreset('month')">Month</button>
+        <button class="btn btn-xs" onclick="SharedViews.setCaseDatePreset('quarter')">Quarter</button>
+        <button class="btn btn-xs" onclick="SharedViews.setCaseDatePreset('year')">Year</button>
+        <button class="btn btn-xs" onclick="SharedViews.setCaseDatePreset('all')">All time</button>
+      </div>
+      <input type="date" id="fl-from" value="${dateFrom}" onchange="SharedViews.applyCaseDateFilter()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+      <span style="color:#aaa;font-size:12px">to</span>
+      <input type="date" id="fl-to" value="${dateTo}" onchange="SharedViews.applyCaseDateFilter()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">` : ''}
+    `);
     SharedViews._caseData = entries;
     UI.setContent(`
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Case ID</th><th>Case Name</th><th>Case Planner</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Reviewed</th><th></th></tr></thead>
+          <thead><tr><th>Case ID</th><th>Case Name</th><th>Program</th><th>Case Planner</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Reviewed</th><th></th></tr></thead>
           <tbody id="case-tbody"></tbody>
         </table>
       </div>`);
+    SharedViews._caseProgramId = programId;
     this.filterCases();
+  },
+
+  setCaseDatePreset(preset) {
+    const { from, to } = ExecViews.getDatePreset(preset);
+    ExecViews._dateFrom = from;
+    ExecViews._dateTo   = to;
+    SharedViews.renderCases(null);
+  },
+
+  applyCaseDateFilter() {
+    ExecViews._dateFrom = document.getElementById('fl-from')?.value || null;
+    ExecViews._dateTo   = document.getElementById('fl-to')?.value   || null;
+    SharedViews.renderCases(null);
   },
 
   filterCases() {
     const pl   = document.getElementById('fl-planner')?.value||'';
     const fp   = document.getElementById('fl-fasp')?.value||'';
+    const prog = document.getElementById('fl-prog')?.value||'';
     const srch = (document.getElementById('fl-search')?.value||'').toLowerCase();
     const filtered = (SharedViews._caseData||[]).filter(e=>
       (!pl   || e.case_planner===pl) &&
       (!fp   || e.fasp_status===fp) &&
-      (!srch || (e.case_id||'').toLowerCase().includes(srch) || (e.case_planner||'').toLowerCase().includes(srch))
+      (!prog || e.program_id===prog) &&
+      (!srch || (e.case_id||'').toLowerCase().includes(srch) || (e.case_planner||'').toLowerCase().includes(srch) || (e.case_name||'').toLowerCase().includes(srch))
     );
     document.getElementById('case-tbody').innerHTML = filtered.length
       ? filtered.map(e=>`<tr>
@@ -291,7 +335,7 @@ const SharedViews = {
           <td>${e.reviewed?'<span class="badge badge-green">Reviewed</span>':'<span class="badge badge-gray">Pending</span>'}</td>
           <td><button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Sup note</button></td>
         </tr>`).join('')
-      : '<tr><td colspan="12" class="empty-state">No cases match filters</td></tr>';
+      : '<tr><td colspan="13" class="empty-state">No cases match filters</td></tr>';
   },
 
   // ── SUPERVISION LOG ────────────────────────────────────────
