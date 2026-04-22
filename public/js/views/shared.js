@@ -251,48 +251,50 @@ const SharedViews = {
     const dateFrom = ExecViews._dateFrom || '';
     const dateTo   = ExecViews._dateTo   || '';
 
-    // Admin/executive: load ALL roster cases + merge with latest entry scores + entry counts
-    // Others: load latest entries for their program(s)
+    // ALL roles: load full roster + merge with latest entry scores + entry counts
+    // Admin/exec see all programs; others scoped to their program(s)
     let entries = [];
-    if (isAdminOrExec) {
-      const [roster, latestEntries, subStats] = await Promise.all([
-        API.get('/api/roster?active=false') || [],
-        API.get(`/api/entries/latest?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`) || [],
-        API.get(`/api/submission-stats?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`) || {},
-      ]);
-      const entryMap = {};
-      (latestEntries||[]).forEach(e => { entryMap[e.case_id] = e; });
-      const countMap = {};
-      ((subStats||{}).caseEntryCounts||[]).forEach(c => { countMap[c.case_id] = c; });
-      entries = (roster||[]).map(r => ({
-        case_id:         r.case_id,
-        case_name:       r.case_name || '',
-        program_id:      r.program_id || '',
-        case_planner:    r.planner_name || '',
-        week_ending:     entryMap[r.case_id]?.week_ending || '',
-        weekly_score:    entryMap[r.case_id]?.weekly_score ?? null,
-        monthly_score:   entryMap[r.case_id]?.monthly_score ?? null,
-        quarterly_score: entryMap[r.case_id]?.quarterly_score ?? null,
-        lifetime_score:  entryMap[r.case_id]?.lifetime_score ?? null,
-        safety_flag:     entryMap[r.case_id]?.safety_flag || 'No',
-        fasp_status:     entryMap[r.case_id]?.fasp_status || 'Pending',
-        reviewed:        entryMap[r.case_id]?.reviewed || false,
-        active:          r.active,
-        manually_assigned: r.manually_assigned,
-        open_date:       r.open_date || '',
-        end_date:        r.end_date || '',
-        has_entry:       !!entryMap[r.case_id],
-        entry_count:     parseInt(countMap[r.case_id]?.entry_count || 0),
-        first_entry:     countMap[r.case_id]?.first_entry || '',
-        last_entry:      countMap[r.case_id]?.last_entry || '',
-      }));
-    } else {
-      let url = '/api/entries/latest?_=1';
-      if (programId) url += `&program_id=${encodeURIComponent(programId)}`;
-      if (dateFrom)  url += `&date_from=${dateFrom}`;
-      if (dateTo)    url += `&date_to=${dateTo}`;
-      entries = await API.get(url) || [];
-    }
+    const rosterUrl = isAdminOrExec
+      ? '/api/roster?active=false'
+      : `/api/roster?active=false${programId ? '&program_id=' + encodeURIComponent(programId) : ''}`;
+
+    const latestUrl = `/api/entries/latest?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}${(!isAdminOrExec && programId)?'&program_id='+encodeURIComponent(programId):''}`;
+
+    const statsUrl = `/api/submission-stats?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}${(!isAdminOrExec && programId)?'&program_id='+encodeURIComponent(programId):''}`;
+
+    const [roster, latestEntries, subStats] = await Promise.all([
+      API.get(rosterUrl) || [],
+      API.get(latestUrl) || [],
+      API.get(statsUrl)  || {},
+    ]);
+
+    const entryMap = {};
+    (latestEntries||[]).forEach(e => { entryMap[e.case_id] = e; });
+    const countMap = {};
+    ((subStats||{}).caseEntryCounts||[]).forEach(c => { countMap[c.case_id] = c; });
+
+    entries = (roster||[]).map(r => ({
+      case_id:         r.case_id,
+      case_name:       r.case_name || '',
+      program_id:      r.program_id || '',
+      case_planner:    r.planner_name || '',
+      week_ending:     entryMap[r.case_id]?.week_ending || '',
+      weekly_score:    entryMap[r.case_id]?.weekly_score ?? null,
+      monthly_score:   entryMap[r.case_id]?.monthly_score ?? null,
+      quarterly_score: entryMap[r.case_id]?.quarterly_score ?? null,
+      lifetime_score:  entryMap[r.case_id]?.lifetime_score ?? null,
+      safety_flag:     entryMap[r.case_id]?.safety_flag || 'No',
+      fasp_status:     entryMap[r.case_id]?.fasp_status || 'Pending',
+      reviewed:        entryMap[r.case_id]?.reviewed || false,
+      active:          r.active,
+      manually_assigned: r.manually_assigned,
+      open_date:       r.open_date || '',
+      end_date:        r.end_date || '',
+      has_entry:       !!entryMap[r.case_id],
+      entry_count:     parseInt(countMap[r.case_id]?.entry_count || 0),
+      first_entry:     countMap[r.case_id]?.first_entry || '',
+      last_entry:      countMap[r.case_id]?.last_entry || '',
+    }));
 
     // Get all programs for filter dropdown
     const programs = isAdminOrExec ? (await API.get('/api/programs') || []) : [];

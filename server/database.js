@@ -686,7 +686,7 @@ module.exports = {
   },
 
   async getStaff(programId, programIds) {
-    let sql = "SELECT id,name,initials,email,role,program_id FROM users WHERE role='staff' AND active=true";
+    let sql = "SELECT id,name,initials,email,role,program_id FROM users WHERE role IN ('staff','supervisor','program_director') AND active=true";
     const params = [];
     if (programIds && programIds.length > 0) {
       sql += ` AND program_id = ANY($${params.push(programIds)})`;
