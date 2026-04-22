@@ -1,6 +1,3 @@
-/**
- * server/database.js — PostgreSQL data layer with children tracking
- */
 const { pool } = require('./migrate');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -12,6 +9,18 @@ async function query(sql, params = []) {
 async function queryOne(sql, params = []) {
   const result = await pool.query(sql, params);
   return result.rows[0] || null;
+}
+
+function addProgramFilter(baseSql, baseParams, programId, programIds, alias) {
+  const col = alias ? `${alias}.program_id` : 'program_id';
+  const params = [...baseParams];
+  let sql = baseSql;
+  if (programIds && programIds.length > 0) {
+    sql += ` AND ${col} = ANY($${params.push(programIds)})`;
+  } else if (programId) {
+    sql += ` AND ${col} = $${params.push(programId)}`;
+  }
+  return { sql, params };
 }
 
 function calcAllScores(responses) {
@@ -37,37 +46,22 @@ function calcAllScores(responses) {
 
 async function importRosterCSV(csvText, uploadedBy) {
   const today = new Date().toISOString().slice(0, 10);
-
-  // Clean Windows line endings
   const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
   if (lines.length < 2) throw new Error('CSV file appears empty');
-
-  // Detect delimiter
   const firstLine = lines[0];
   const delim = firstLine.includes('\t') ? '\t' : ',';
   const headers = firstLine.split(delim).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase().trim());
 
   const col = name => {
     const aliases = {
-      'child_name':      ['child name'],
-      'child_pid':       ['child pid'],
-      'cin':             ['cin'],
-      'gender':          ['gender'],
-      'dob':             ['dob'],
-      'racial_identity': ['racial identity'],
-      'ethnicity':       ['ethnicity'],
-      'ppg':             ['ppg'],
-      'conn_case_id':    ['conn case id', 'cnnx case id', 'conn_case_id'],
-      'wms_case_id':     ['wms case id', 'wms_case_id'],
-      'case_name':       ['case name'],
-      'cid':             ['cid'],
-      'stage_id':        ['stage id'],
-      'stage_type':      ['stage type'],
-      'stage_start':     ['stage start'],
-      'agency':          ['agency'],
-      'worker_name':     ['worker name'],
-      'role':            ['role'],
-      'site_unit':       ['site-unit', 'site unit', 'site_unit'],
+      'child_name':   ['child name'], 'child_pid': ['child pid'], 'cin': ['cin'],
+      'gender': ['gender'], 'dob': ['dob'], 'racial_identity': ['racial identity'],
+      'ethnicity': ['ethnicity'], 'ppg': ['ppg'],
+      'conn_case_id': ['conn case id', 'cnnx case id', 'conn_case_id'],
+      'wms_case_id':  ['wms case id', 'wms_case_id'], 'case_name': ['case name'],
+      'cid': ['cid'], 'stage_id': ['stage id'], 'stage_type': ['stage type'],
+      'stage_start': ['stage start'], 'agency': ['agency'], 'worker_name': ['worker name'],
+      'role': ['role'], 'site_unit': ['site-unit', 'site unit', 'site_unit'],
     };
     const aliasList = aliases[name] || [name];
     for (const alias of aliasList) {
@@ -83,72 +77,48 @@ async function importRosterCSV(csvText, uploadedBy) {
     return (row[idx] || '').trim().replace(/^"|"$/g, '').trim();
   };
 
-  const rows = lines.slice(1)
-    .map(line => line.split(delim))
-    .filter(r => r.length > 3);
-
-  // Group by case_id — skip rows with empty CONN Case ID
+  const rows = lines.slice(1).map(line => line.split(delim)).filter(r => r.length > 3);
   const caseMap = {};
   for (const row of rows) {
     const caseId = get(row, 'conn_case_id');
-    if (!caseId || caseId === '') continue;
-
+    if (!caseId) continue;
     const siteUnit = get(row, 'site_unit');
     if (!caseMap[caseId]) {
       caseMap[caseId] = {
-        case_id:      caseId,
-        program_id:   siteUnit,
-        wms_case_id:  get(row, 'wms_case_id'),
-        case_name:    get(row, 'case_name'),
-        planner_name: get(row, 'worker_name'),
-        agency:       get(row, 'agency'),
-        open_date:    get(row, 'stage_start'),
-        children: [],
+        case_id: caseId, program_id: siteUnit,
+        wms_case_id: get(row, 'wms_case_id'), case_name: get(row, 'case_name'),
+        planner_name: get(row, 'worker_name'), agency: get(row, 'agency'),
+        open_date: get(row, 'stage_start'), children: [],
       };
     }
-
     const cin = get(row, 'cin');
-    if (cin && cin !== '') {
+    if (cin) {
       caseMap[caseId].children.push({
-        case_id:        caseId,
-        child_name:     get(row, 'child_name'),
-        child_pid:      get(row, 'child_pid'),
-        cin,
-        gender:         get(row, 'gender'),
-        dob:            get(row, 'dob'),
-        racial_identity:get(row, 'racial_identity'),
-        ethnicity:      get(row, 'ethnicity'),
-        ppg:            get(row, 'ppg'),
-        wms_case_id:    get(row, 'wms_case_id'),
-        case_name:      get(row, 'case_name'),
-        cid:            get(row, 'cid'),
-        stage_id:       get(row, 'stage_id'),
-        stage_type:     get(row, 'stage_type'),
-        stage_start:    get(row, 'stage_start'),
-        agency:         get(row, 'agency'),
-        worker_name:    get(row, 'worker_name'),
-        worker_role:    get(row, 'role'),
-        site_unit:      siteUnit,
-        program_id:     siteUnit,
-        added_date:     today,
+        case_id: caseId, child_name: get(row, 'child_name'), child_pid: get(row, 'child_pid'),
+        cin, gender: get(row, 'gender'), dob: get(row, 'dob'),
+        racial_identity: get(row, 'racial_identity'), ethnicity: get(row, 'ethnicity'),
+        ppg: get(row, 'ppg'), wms_case_id: get(row, 'wms_case_id'),
+        case_name: get(row, 'case_name'), cid: get(row, 'cid'),
+        stage_id: get(row, 'stage_id'), stage_type: get(row, 'stage_type'),
+        stage_start: get(row, 'stage_start'), agency: get(row, 'agency'),
+        worker_name: get(row, 'worker_name'), worker_role: get(row, 'role'),
+        site_unit: siteUnit, program_id: siteUnit, added_date: today,
       });
     }
   }
 
   const uploadedCaseIds = Object.keys(caseMap);
   if (uploadedCaseIds.length === 0) {
-    throw new Error(`No valid cases found. Make sure the file is saved as CSV (not Excel .xlsx). Headers found: ${headers.slice(0,5).join(', ')}`);
+    throw new Error(`No valid cases found. Make sure file is CSV not Excel. Headers: ${headers.slice(0,5).join(', ')}`);
   }
 
   let stats = { cases_added:0, cases_updated:0, cases_ended:0, children_added:0, children_updated:0, children_ended:0 };
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // End-date active cases NOT in this upload
     const activeResult = await client.query(
-      "SELECT case_id FROM roster WHERE active=true AND last_seen_upload IS NOT NULL"
+      "SELECT case_id FROM roster WHERE active=true AND last_seen_upload IS NOT NULL AND manually_assigned=false"
     );
     for (const { case_id } of activeResult.rows) {
       if (!uploadedCaseIds.includes(case_id)) {
@@ -158,29 +128,34 @@ async function importRosterCSV(csvText, uploadedBy) {
       }
     }
 
-    // Upsert each case and its children
     for (const c of Object.values(caseMap)) {
-      if (!c.case_id || c.case_id === '') continue;
-
-      const existing = await client.query('SELECT case_id FROM roster WHERE case_id=$1', [c.case_id]);
+      if (!c.case_id) continue;
+      const existing = await client.query('SELECT case_id, manually_assigned FROM roster WHERE case_id=$1', [c.case_id]);
       if (existing.rows.length === 0) {
         await client.query(
-          `INSERT INTO roster (case_id,program_id,planner_name,wms_case_id,case_name,agency,open_date,active,last_seen_upload,children_count)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8,$9)`,
+          `INSERT INTO roster (case_id,program_id,planner_name,wms_case_id,case_name,agency,open_date,active,last_seen_upload,children_count,manually_assigned)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8,$9,false)`,
           [c.case_id, c.program_id||'', c.planner_name||'', c.wms_case_id||'', c.case_name||'', c.agency||'', c.open_date||'', today, c.children.length]
         );
         stats.cases_added++;
       } else {
-        await client.query(
-          `UPDATE roster SET program_id=$1, planner_name=$2, wms_case_id=$3, case_name=$4,
-           agency=$5, active=true, end_date=NULL, last_seen_upload=$6, children_count=$7 WHERE case_id=$8`,
-          [c.program_id||'', c.planner_name||'', c.wms_case_id||'', c.case_name||'', c.agency||'', today, c.children.length, c.case_id]
-        );
+        const isManual = existing.rows[0].manually_assigned;
+        if (isManual) {
+          await client.query(
+            'UPDATE roster SET active=true, end_date=NULL, last_seen_upload=$1, children_count=$2 WHERE case_id=$3',
+            [today, c.children.length, c.case_id]
+          );
+        } else {
+          await client.query(
+            `UPDATE roster SET program_id=$1, planner_name=$2, wms_case_id=$3, case_name=$4,
+             agency=$5, active=true, end_date=NULL, last_seen_upload=$6, children_count=$7 WHERE case_id=$8`,
+            [c.program_id||'', c.planner_name||'', c.wms_case_id||'', c.case_name||'', c.agency||'', today, c.children.length, c.case_id]
+          );
+        }
         stats.cases_updated++;
       }
 
       const uploadedCINs = c.children.map(ch => ch.cin).filter(Boolean);
-
       if (uploadedCINs.length > 0) {
         await client.query(
           `UPDATE children SET active=false, end_date=$1
@@ -191,10 +166,7 @@ async function importRosterCSV(csvText, uploadedBy) {
 
       for (const ch of c.children) {
         if (!ch.cin || !ch.case_id) continue;
-        const existingChild = await client.query(
-          'SELECT id FROM children WHERE case_id=$1 AND cin=$2',
-          [ch.case_id, ch.cin]
-        );
+        const existingChild = await client.query('SELECT id FROM children WHERE case_id=$1 AND cin=$2', [ch.case_id, ch.cin]);
         if (existingChild.rows.length === 0) {
           await client.query(
             `INSERT INTO children (case_id,program_id,child_name,child_pid,cin,gender,dob,racial_identity,ethnicity,ppg,wms_case_id,case_name,cid,stage_id,stage_type,stage_start,agency,worker_name,worker_role,site_unit,active,added_date)
@@ -271,10 +243,7 @@ module.exports = {
   async getProgramScores() {
     const programs = await this.getAllPrograms();
     return Promise.all(programs.map(async p => {
-      const scores = await queryOne(
-        `SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms,
-                ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls
-         FROM entries WHERE program_id=$1`, [p.id]) || {};
+      const scores   = await queryOne(`SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls FROM entries WHERE program_id=$1`, [p.id]) || {};
       const cases    = parseInt((await queryOne('SELECT COUNT(*) as c FROM roster WHERE program_id=$1 AND active=true', [p.id]))?.c || 0);
       const flags    = parseInt((await queryOne("SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE program_id=$1 AND safety_flag='Yes'", [p.id]))?.c || 0);
       const fasp     = parseInt((await queryOne("SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE program_id=$1 AND fasp_status='Overdue'", [p.id]))?.c || 0);
@@ -282,25 +251,31 @@ module.exports = {
       return { ...p, cases, ...scores, flags, fasp, children };
     }));
   },
-  async getWeeklyTrend(programId) {
-    const rows = programId
-      ? await query(`SELECT week_ending, ROUND(AVG(weekly_score))::int as score FROM entries WHERE weekly_score IS NOT NULL AND program_id=$1 GROUP BY week_ending ORDER BY week_ending DESC LIMIT 12`, [programId])
-      : await query(`SELECT week_ending, ROUND(AVG(weekly_score))::int as score FROM entries WHERE weekly_score IS NOT NULL GROUP BY week_ending ORDER BY week_ending DESC LIMIT 12`);
+  async getWeeklyTrend(programId, programIds) {
+    const { sql, params } = addProgramFilter(
+      'SELECT week_ending, ROUND(AVG(weekly_score))::int as score FROM entries WHERE weekly_score IS NOT NULL',
+      [], programId, programIds
+    );
+    const rows = await query(sql + ' GROUP BY week_ending ORDER BY week_ending DESC LIMIT 12', params);
     return rows.reverse();
   },
 
-  async getRoster(programId, activeOnly = true) {
+  async getRoster(programId, programIds, activeOnly = true) {
     let sql = 'SELECT * FROM roster WHERE 1=1';
     const params = [];
-    if (programId)  { sql += ` AND program_id=$${params.push(programId)}`; }
-    if (activeOnly) { sql += ' AND active=true'; }
+    if (programIds && programIds.length > 0) {
+      sql += ` AND program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND program_id = $${params.push(programId)}`;
+    }
+    if (activeOnly) sql += ' AND active=true';
     sql += ' ORDER BY case_id';
     return query(sql, params);
   },
   async addCase(data) {
     await query(
-      `INSERT INTO roster (case_id,household_id,program_id,planner_name,supervisor_name,open_date,children_count,modality,notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (case_id) DO NOTHING`,
+      `INSERT INTO roster (case_id,household_id,program_id,planner_name,supervisor_name,open_date,children_count,modality,notes,manually_assigned)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true) ON CONFLICT (case_id) DO NOTHING`,
       [data.case_id, data.household_id||'', data.program_id, data.planner_name||'',
        data.supervisor_name||'', data.open_date||'', data.children_count||1, data.modality||'', data.notes||'']
     );
@@ -311,30 +286,36 @@ module.exports = {
       [data.planner_name, data.supervisor_name, data.children_count, data.active!==false, data.notes||'', caseId]
     );
   },
+  async reassignCase(caseId, data, user) {
+    await query(
+      `UPDATE roster SET planner_name=$1, program_id=$2, supervisor_name=$3,
+       manually_assigned=true, notes=COALESCE(NULLIF(notes,''),'')||$4 WHERE case_id=$5`,
+      [data.planner_name, data.program_id, data.supervisor_name||'',
+       ` [Reassigned by ${user.name} on ${new Date().toISOString().slice(0,10)}]`, caseId]
+    );
+    await query('UPDATE children SET program_id=$1 WHERE case_id=$2', [data.program_id, caseId]);
+  },
 
   async getChildrenForCase(caseId) {
     return query('SELECT * FROM children WHERE case_id=$1 AND active=true ORDER BY child_name', [caseId]);
   },
-  async getChildrenForProgram(programId) {
-    return query(
-      'SELECT c.*, r.planner_name FROM children c JOIN roster r ON c.case_id=r.case_id WHERE c.program_id=$1 AND c.active=true ORDER BY c.case_id, c.child_name',
-      [programId]
-    );
-  },
-  async getAllActiveChildren(programId) {
+  async getAllActiveChildren(programId, programIds) {
     let sql = 'SELECT c.*, r.planner_name, r.case_name FROM children c JOIN roster r ON c.case_id=r.case_id WHERE c.active=true AND r.active=true';
     const params = [];
-    if (programId) { sql += ` AND c.program_id=$${params.push(programId)}`; }
+    if (programIds && programIds.length > 0) {
+      sql += ` AND c.program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND c.program_id = $${params.push(programId)}`;
+    }
     sql += ' ORDER BY c.program_id, c.case_id, c.child_name';
     return query(sql, params);
   },
   importRosterCSV,
 
-  async getChildrenSeenCompliance(programId, month, year) {
+  async getChildrenSeenCompliance(programId, programIds, month, year) {
     const monthStr = `${year}-${String(month).padStart(2,'0')}`;
     let sql = `
-      SELECT
-        c.cin, c.child_name, c.dob, c.case_id, c.program_id,
+      SELECT c.cin, c.child_name, c.dob, c.case_id, c.program_id,
         r.planner_name, r.case_name,
         COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END)::int as times_seen,
         MAX(CASE WHEN cs->>'seen' = 'Yes' THEN e.week_ending END) as last_seen,
@@ -346,15 +327,18 @@ module.exports = {
       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(e.children_seen,'[]')) cs ON cs->>'cin' = c.cin
       WHERE c.active = true AND r.active = true`;
     const params = [monthStr + '%'];
-    if (programId) { sql += ` AND c.program_id=$${params.push(programId)}`; }
+    if (programIds && programIds.length > 0) {
+      sql += ` AND c.program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND c.program_id = $${params.push(programId)}`;
+    }
     sql += ' GROUP BY c.cin, c.child_name, c.dob, c.case_id, c.program_id, r.planner_name, r.case_name ORDER BY compliance_status, c.program_id, c.case_id, c.child_name';
     return query(sql, params);
   },
 
-  async getChildrenNotSeenThisWeek(programId, weekEnding) {
+  async getChildrenNotSeenThisWeek(programId, programIds, weekEnding) {
     let sql = `
-      SELECT
-        c.cin, c.child_name, c.dob, c.case_id, c.program_id,
+      SELECT c.cin, c.child_name, c.dob, c.case_id, c.program_id,
         r.planner_name, r.case_name,
         COALESCE(cs->>'seen', 'Not submitted') as seen_status,
         COALESCE(cs->>'reason_not_seen', '') as reason_not_seen
@@ -365,38 +349,34 @@ module.exports = {
       WHERE c.active = true AND r.active = true
         AND (cs->>'seen' IS NULL OR cs->>'seen' != 'Yes')`;
     const params = [weekEnding];
-    if (programId) { sql += ` AND c.program_id=$${params.push(programId)}`; }
+    if (programIds && programIds.length > 0) {
+      sql += ` AND c.program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND c.program_id = $${params.push(programId)}`;
+    }
     sql += ' ORDER BY c.program_id, c.case_id, c.child_name';
     return query(sql, params);
   },
 
   async saveEntry(entry, userId, userName, userRole) {
-    const responses    = entry.responses || [];
+    const responses = entry.responses || [];
     const childrenSeen = entry.children_seen || [];
     const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses);
     const recordId = 'LOG-' + uuidv4().slice(0,8).toUpperCase();
     await query(
-      `INSERT INTO entries
-       (record_id,case_id,program_id,week_ending,submitted_by,submitted_name,submitted_role,
-        case_planner,household_id,children_count,submission_notes,responses,children_seen,
-        weekly_score,monthly_score,quarterly_score,lifetime_score,safety_flag,fasp_status)
+      `INSERT INTO entries (record_id,case_id,program_id,week_ending,submitted_by,submitted_name,submitted_role,case_planner,household_id,children_count,submission_notes,responses,children_seen,weekly_score,monthly_score,quarterly_score,lifetime_score,safety_flag,fasp_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [recordId, entry.case_id, entry.program_id, entry.week_ending,
-       userId, userName, userRole, entry.case_planner, entry.household_id||'',
-       entry.children_count||0, entry.submission_notes||'',
-       JSON.stringify(responses), JSON.stringify(childrenSeen),
-       ws, ms, qs, ls, sf, fasp]
+      [recordId, entry.case_id, entry.program_id, entry.week_ending, userId, userName, userRole,
+       entry.case_planner, entry.household_id||'', entry.children_count||0, entry.submission_notes||'',
+       JSON.stringify(responses), JSON.stringify(childrenSeen), ws, ms, qs, ls, sf, fasp]
     );
   },
   async updateEntry(id, entry, userId) {
-    const responses    = entry.responses || [];
+    const responses = entry.responses || [];
     const childrenSeen = entry.children_seen || [];
     const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses);
     await query(
-      `UPDATE entries SET responses=$1,children_seen=$2,weekly_score=$3,monthly_score=$4,
-       quarterly_score=$5,lifetime_score=$6,safety_flag=$7,fasp_status=$8,case_planner=$9,
-       children_count=$10,submission_notes=$11,last_edited_by=$12,last_edited_at=NOW()
-       WHERE id=$13 AND reviewed=false`,
+      `UPDATE entries SET responses=$1,children_seen=$2,weekly_score=$3,monthly_score=$4,quarterly_score=$5,lifetime_score=$6,safety_flag=$7,fasp_status=$8,case_planner=$9,children_count=$10,submission_notes=$11,last_edited_by=$12,last_edited_at=NOW() WHERE id=$13 AND reviewed=false`,
       [JSON.stringify(responses), JSON.stringify(childrenSeen), ws, ms, qs, ls, sf, fasp,
        entry.case_planner, entry.children_count||0, entry.submission_notes||'', userId, id]
     );
@@ -404,11 +384,12 @@ module.exports = {
   async reviewEntry(id, reviewerId) {
     await query('UPDATE entries SET reviewed=true,reviewed_by=$1,reviewed_at=NOW() WHERE id=$2', [reviewerId, id]);
   },
-  async getEntries({ caseId, programId, weekEnding, planner, dateFrom, dateTo, limit=500 }) {
+  async getEntries({ caseId, programId, programIds, weekEnding, planner, dateFrom, dateTo, limit=500 }) {
     let sql = 'SELECT * FROM entries WHERE 1=1';
     const params = [];
-    if (caseId)     { sql += ` AND case_id=$${params.push(caseId)}`; }
-    if (programId)  { sql += ` AND program_id=$${params.push(programId)}`; }
+    if (caseId) { sql += ` AND case_id=$${params.push(caseId)}`; }
+    if (programIds && programIds.length > 0) { sql += ` AND program_id = ANY($${params.push(programIds)})`; }
+    else if (programId) { sql += ` AND program_id=$${params.push(programId)}`; }
     if (weekEnding) { sql += ` AND week_ending=$${params.push(weekEnding)}`; }
     if (planner)    { sql += ` AND case_planner=$${params.push(planner)}`; }
     if (dateFrom)   { sql += ` AND week_ending>=$${params.push(dateFrom)}`; }
@@ -421,12 +402,23 @@ module.exports = {
       children_seen: Array.isArray(e.children_seen) ? e.children_seen : JSON.parse(e.children_seen || '[]'),
     }));
   },
-  async getLatestPerCase(programId) {
-    const sql = `
-      SELECT e.* FROM entries e
-      JOIN (SELECT case_id, MAX(id) as mid FROM entries ${programId?'WHERE program_id=$1':''} GROUP BY case_id) m
-      ON e.id=m.mid ORDER BY e.case_id`;
-    const rows = await query(sql, programId ? [programId] : []);
+  async getLatestPerCase(programId, programIds) {
+    const params = [];
+    let innerWhere = '';
+    if (programIds && programIds.length > 0) {
+      innerWhere = ` WHERE program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      innerWhere = ` WHERE program_id = $${params.push(programId)}`;
+    }
+    const outerParams = [...params];
+    let outerWhere = '';
+    if (programIds && programIds.length > 0) {
+      outerWhere = ` AND e.program_id = ANY($${outerParams.push(programIds)})`;
+    } else if (programId) {
+      outerWhere = ` AND e.program_id = $${outerParams.push(programId)}`;
+    }
+    const sql = `SELECT e.* FROM entries e JOIN (SELECT case_id, MAX(id) as mid FROM entries${innerWhere} GROUP BY case_id) m ON e.id=m.mid${outerWhere} ORDER BY e.case_id`;
+    const rows = await query(sql, outerParams);
     return rows.map(e => ({
       ...e,
       responses:     Array.isArray(e.responses)     ? e.responses     : JSON.parse(e.responses     || '[]'),
@@ -434,27 +426,23 @@ module.exports = {
     }));
   },
 
-  async getDashboard(programId, weekEnding) {
-    const we = weekEnding || new Date().toISOString().slice(0,10);
-    const totalCases    = parseInt((await queryOne(`SELECT COUNT(*) as c FROM roster WHERE active=true${programId?' AND program_id=$1':''}`, programId?[programId]:[]))?.c || 0);
-    const safetyFlags   = parseInt((await queryOne(`SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE safety_flag='Yes'${programId?' AND program_id=$1':''}`, programId?[programId]:[]))?.c || 0);
-    const faspOver      = parseInt((await queryOne(`SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE fasp_status='Overdue'${programId?' AND program_id=$1':''}`, programId?[programId]:[]))?.c || 0);
-    const totalChildren = parseInt((await queryOne(`SELECT COUNT(*) as c FROM children WHERE active=true${programId?' AND program_id=$1':''}`, programId?[programId]:[]))?.c || 0);
-    const scoresQ = programId
-      ? `SELECT ROUND(AVG(CASE WHEN week_ending=$1 THEN weekly_score END))::int as weekly, ROUND(AVG(monthly_score))::int as monthly, ROUND(AVG(quarterly_score))::int as quarterly, ROUND(AVG(lifetime_score))::int as lifetime FROM entries WHERE program_id=$2`
-      : `SELECT ROUND(AVG(CASE WHEN week_ending=$1 THEN weekly_score END))::int as weekly, ROUND(AVG(monthly_score))::int as monthly, ROUND(AVG(quarterly_score))::int as quarterly, ROUND(AVG(lifetime_score))::int as lifetime FROM entries`;
-    const scores = await queryOne(scoresQ, programId ? [we, programId] : [we]) || {};
-    const byPlannerQ = programId
-      ? `SELECT case_planner, ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls, COUNT(*) as entries FROM entries WHERE case_planner IS NOT NULL AND program_id=$1 GROUP BY case_planner ORDER BY case_planner`
-      : `SELECT case_planner, ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls, COUNT(*) as entries FROM entries WHERE case_planner IS NOT NULL GROUP BY case_planner ORDER BY case_planner`;
-    const byPlanner    = await query(byPlannerQ, programId ? [programId] : []);
-    const caseScores   = await this.getLatestPerCase(programId);
-    const trend        = await this.getWeeklyTrend(programId);
-    const programs     = programId ? null : await this.getProgramScores();
-    const notSeenThisWeek    = await this.getChildrenNotSeenThisWeek(programId, we);
-    const now                = new Date();
-    const monthlyCompliance  = await this.getChildrenSeenCompliance(programId, now.getMonth()+1, now.getFullYear());
-    const nonCompliantMonthly= monthlyCompliance.filter(c => c.compliance_status === 'Non-compliant').length;
+  async getDashboard(programId, programIds, weekEnding) {
+    const we  = weekEnding || new Date().toISOString().slice(0,10);
+    const pids = programIds && programIds.length > 0 ? programIds : (programId ? [programId] : null);
+
+    const totalCases    = parseInt((await queryOne(pids ? `SELECT COUNT(*) as c FROM roster WHERE active=true AND program_id = ANY($1)` : `SELECT COUNT(*) as c FROM roster WHERE active=true`, pids ? [pids] : []))?.c || 0);
+    const totalChildren = parseInt((await queryOne(pids ? `SELECT COUNT(*) as c FROM children WHERE active=true AND program_id = ANY($1)` : `SELECT COUNT(*) as c FROM children WHERE active=true`, pids ? [pids] : []))?.c || 0);
+    const safetyFlags   = parseInt((await queryOne(pids ? `SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE safety_flag='Yes' AND program_id = ANY($1)` : `SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE safety_flag='Yes'`, pids ? [pids] : []))?.c || 0);
+    const faspOver      = parseInt((await queryOne(pids ? `SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE fasp_status='Overdue' AND program_id = ANY($1)` : `SELECT COUNT(DISTINCT case_id) as c FROM entries WHERE fasp_status='Overdue'`, pids ? [pids] : []))?.c || 0);
+    const scores        = await queryOne(pids ? `SELECT ROUND(AVG(CASE WHEN week_ending=$1 THEN weekly_score END))::int as weekly, ROUND(AVG(monthly_score))::int as monthly, ROUND(AVG(quarterly_score))::int as quarterly, ROUND(AVG(lifetime_score))::int as lifetime FROM entries WHERE program_id = ANY($2)` : `SELECT ROUND(AVG(CASE WHEN week_ending=$1 THEN weekly_score END))::int as weekly, ROUND(AVG(monthly_score))::int as monthly, ROUND(AVG(quarterly_score))::int as quarterly, ROUND(AVG(lifetime_score))::int as lifetime FROM entries`, pids ? [we, pids] : [we]) || {};
+    const byPlanner     = await query(pids ? `SELECT case_planner, ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls, COUNT(*) as entries FROM entries WHERE case_planner IS NOT NULL AND program_id = ANY($1) GROUP BY case_planner ORDER BY case_planner` : `SELECT case_planner, ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls, COUNT(*) as entries FROM entries WHERE case_planner IS NOT NULL GROUP BY case_planner ORDER BY case_planner`, pids ? [pids] : []);
+    const caseScores    = await this.getLatestPerCase(programId, programIds);
+    const trend         = await this.getWeeklyTrend(programId, programIds);
+    const programs      = (!programId && !programIds) ? await this.getProgramScores() : null;
+    const notSeenThisWeek     = await this.getChildrenNotSeenThisWeek(programId, programIds, we);
+    const now                 = new Date();
+    const monthlyCompliance   = await this.getChildrenSeenCompliance(programId, programIds, now.getMonth()+1, now.getFullYear());
+    const nonCompliantMonthly = monthlyCompliance.filter(c => c.compliance_status === 'Non-compliant').length;
     return {
       totalCases, safetyFlags, faspOver, totalChildren,
       notSeenCount: notSeenThisWeek.length, nonCompliantMonthly,
@@ -466,7 +454,11 @@ module.exports = {
   async getSupervisionLog(filters = {}) {
     let sql = 'SELECT * FROM supervision_log WHERE 1=1';
     const params = [];
-    if (filters.programId) { sql += ` AND program_id=$${params.push(filters.programId)}`; }
+    if (filters.programIds && filters.programIds.length > 0) {
+      sql += ` AND program_id = ANY($${params.push(filters.programIds)})`;
+    } else if (filters.programId) {
+      sql += ` AND program_id=$${params.push(filters.programId)}`;
+    }
     if (filters.staffName) { sql += ` AND staff_name=$${params.push(filters.staffName)}`; }
     if (filters.caseId)    { sql += ` AND case_id=$${params.push(filters.caseId)}`; }
     sql += ' ORDER BY staff_name, created_at DESC';
@@ -474,22 +466,27 @@ module.exports = {
   },
   async addSupervisionNote(data, authorId, authorName, authorRole) {
     await query(
-      `INSERT INTO supervision_log (program_id,case_id,staff_name,author_id,author_name,author_role,domain,content,action_item,due_date,status,entry_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      `INSERT INTO supervision_log (program_id,case_id,staff_name,author_id,author_name,author_role,domain,content,action_item,due_date,status,entry_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [data.program_id, data.case_id||null, data.staff_name, authorId, authorName, authorRole,
-       data.domain||'', data.content, data.action_item||null, data.due_date||null,
-       data.status||'Open', data.entry_type||'note']
+       data.domain||'', data.content, data.action_item||null, data.due_date||null, data.status||'Open', data.entry_type||'note']
     );
   },
   async resolveSupervisionNote(id) {
     await query("UPDATE supervision_log SET resolved=true,status='Resolved',resolved_at=NOW() WHERE id=$1", [id]);
   },
 
-  async getStaff(programId) {
-    const users = await query("SELECT id,name,initials,email,role FROM users WHERE program_id=$1 AND role='staff' AND active=true", [programId]);
+  async getStaff(programId, programIds) {
+    let sql = "SELECT id,name,initials,email,role,program_id FROM users WHERE role='staff' AND active=true";
+    const params = [];
+    if (programIds && programIds.length > 0) {
+      sql += ` AND program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND program_id = $${params.push(programId)}`;
+    }
+    const users = await query(sql, params);
     return Promise.all(users.map(async u => {
-      const scores = await queryOne(`SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, COUNT(*) as entries FROM entries WHERE case_planner=$1 AND program_id=$2`, [u.name, programId]) || {};
-      const cases  = parseInt((await queryOne('SELECT COUNT(*) as c FROM roster WHERE planner_name=$1 AND program_id=$2 AND active=true', [u.name, programId]))?.c || 0);
+      const scores = await queryOne(`SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, COUNT(*) as entries FROM entries WHERE case_planner=$1 AND program_id=$2`, [u.name, u.program_id]) || {};
+      const cases  = parseInt((await queryOne('SELECT COUNT(*) as c FROM roster WHERE planner_name=$1 AND program_id=$2 AND active=true', [u.name, u.program_id]))?.c || 0);
       return { ...u, ...scores, cases };
     }));
   },
