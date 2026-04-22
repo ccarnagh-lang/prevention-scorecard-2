@@ -658,22 +658,68 @@ const SharedViews = {
     UI.setTitle('Case Roster');
     const roster=await API.get('/api/roster?active=false'+(programId?`&program_id=${programId}`:''))||[];
     UI.setTopbar(`<button class="btn btn-p btn-sm" onclick="SharedViews.addCase('${programId||''}')">+ Add case</button>`);
+    SharedViews._rosterProgramId = programId;
     UI.setContent(`
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Case ID</th><th>Case Name (HOH)</th><th>Case Planner</th><th>Program</th><th>Open Date</th><th>End Date</th><th>Children</th><th>Status</th></tr></thead>
+          <thead><tr><th>Case ID</th><th>Case Name (HOH)</th><th>Case Planner</th><th>Program / Unit</th><th>Open Date</th><th>End Date</th><th>Children</th><th>Status</th><th></th></tr></thead>
           <tbody>${roster.map(r=>`<tr>
             <td class="mono bold" style="color:#1B3A5C">${r.case_id}</td>
             <td>${r.case_name||'—'}</td>
             <td>${r.planner_name||'—'}</td>
-            <td style="font-size:12px">${r.program_id||'—'}</td>
+            <td style="font-size:12px">${r.program_id||'—'}${r.manually_assigned?' <span class="badge badge-amber">🔒 Manual</span>':''}</td>
             <td style="font-size:12px;color:#aaa">${r.open_date||'—'}</td>
             <td style="font-size:12px;color:#aaa">${r.end_date||'—'}</td>
             <td style="text-align:center">${r.children_count||0}</td>
             <td>${r.active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-gray">Ended</span>'}</td>
+            <td><button class="btn btn-xs" onclick="SharedViews.reassignCase('${r.case_id}')">Reassign</button></td>
           </tr>`).join('')}</tbody>
         </table>
       </div>`);
+    SharedViews._rosterData = roster;
+  },
+
+  async reassignCase(caseId) {
+    const row      = (SharedViews._rosterData||[]).find(r => r.case_id === caseId) || {};
+    const programs = await API.get('/api/programs') || [];
+    UI.modal(`
+      <div class="modal-title">Reassign case — <span class="mono" style="color:#1B3A5C">${caseId}</span></div>
+      <div style="font-size:12px;color:#633806;margin-bottom:14px;padding:8px 12px;background:#FAEEDA;border-radius:6px;border-left:3px solid #EF9F27">
+        Manual override — this assignment will be locked with a 🔒 badge and will NOT be changed by the weekly CSV upload.
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>New case planner</label>
+        <input type="text" id="ra-planner" value="${row.planner_name||''}" placeholder="Worker full name">
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>New program / unit</label>
+        <select id="ra-program">
+          ${programs.map(p=>`<option value="${p.id}" ${p.id===row.program_id?'selected':''}>${p.name||p.id}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>Supervisor (optional)</label>
+        <input type="text" id="ra-supervisor" value="${row.supervisor_name||''}" placeholder="Supervisor name">
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn btn-p" data-confirm>Confirm reassignment</button>
+      </div>`,
+      async () => {
+        const planner    = document.getElementById('ra-planner')?.value?.trim();
+        const program    = document.getElementById('ra-program')?.value;
+        const supervisor = document.getElementById('ra-supervisor')?.value?.trim();
+        if (!planner) { UI.toast('Case planner name is required', 'error'); return; }
+        if (!program)  { UI.toast('Program / unit is required', 'error'); return; }
+        try {
+          await API.post(`/api/roster/${caseId}/reassign`, {
+            planner_name: planner, program_id: program, supervisor_name: supervisor,
+          });
+          UI.toast(`Case ${caseId} reassigned to ${planner}`, 'success');
+          await SharedViews.renderRoster(SharedViews._rosterProgramId);
+        } catch(e) { UI.toast('Reassignment failed: ' + e.message, 'error'); }
+      }
+    );
   },
 
   addCase(programId) {
