@@ -254,6 +254,20 @@ app.put('/api/supervision-log/:id/resolve', requireAuth, async (req, res) => {
   catch(e) { res.status(400).json({ error: e.message }); }
 });
 
+app.get('/api/submission-stats', requireAuth, scopeProgram, async (req, res) => {
+  try {
+    const u = req.session.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
+    const progIds = isAdminOrExec ? null : req.programScopes;
+    res.json(await db.getSubmissionStats(
+      progId, progIds,
+      req.query.date_from || null,
+      req.query.date_to   || null
+    ));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/export/csv', requireAuth, scopeProgram, async (req, res) => {
   try {
     const entries  = await db.getEntries({ programId:req.programScope, programIds:req.programScopes, dateFrom:req.query.date_from, dateTo:req.query.date_to, limit:10000 });

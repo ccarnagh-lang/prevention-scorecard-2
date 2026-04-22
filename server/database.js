@@ -617,6 +617,48 @@ module.exports = {
     return [header,...rows].join('\r\n');
   },
 
+  async getSubmissionStats(programId, programIds, dateFrom, dateTo) {
+    // Returns weekly submission counts grouped by week_ending
+    // and per-case entry counts
+    const params = [];
+    let baseFilter = ' WHERE 1=1';
+    if (programIds && programIds.length > 0) {
+      baseFilter += ` AND program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      baseFilter += ` AND program_id = $${params.push(programId)}`;
+    }
+    if (dateFrom) { baseFilter += ` AND week_ending >= $${params.push(dateFrom)}`; }
+    if (dateTo)   { baseFilter += ` AND week_ending <= $${params.push(dateTo)}`; }
+
+    // Weekly submission counts
+    const weeklySubmissions = await query(
+      `SELECT week_ending, COUNT(*) as submissions, COUNT(DISTINCT case_id) as unique_cases
+       FROM entries${baseFilter}
+       GROUP BY week_ending ORDER BY week_ending DESC LIMIT 52`,
+      params
+    );
+
+    // Per-case entry counts (for case list column)
+    const caseEntryCounts = await query(
+      `SELECT case_id, COUNT(*) as entry_count,
+              MIN(week_ending) as first_entry, MAX(week_ending) as last_entry
+       FROM entries${baseFilter}
+       GROUP BY case_id`,
+      params
+    );
+
+    // Total stats
+    const totals = await queryOne(
+      `SELECT COUNT(*) as total_entries,
+              COUNT(DISTINCT case_id) as cases_with_entries,
+              COUNT(DISTINCT week_ending) as weeks_covered
+       FROM entries${baseFilter}`,
+      params
+    ) || {};
+
+    return { weeklySubmissions, caseEntryCounts, totals };
+  },
+
   async childrenToCSV(data) {
     const esc = v => { const s=String(v??''); return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s; };
     const cols = ['program_id','case_id','case_name','planner_name','child_name','cin','dob','times_seen','last_seen','compliance_status'];

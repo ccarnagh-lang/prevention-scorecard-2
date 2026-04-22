@@ -251,34 +251,40 @@ const SharedViews = {
     const dateFrom = ExecViews._dateFrom || '';
     const dateTo   = ExecViews._dateTo   || '';
 
-    // Admin/executive: load ALL roster cases + merge with latest entry scores
+    // Admin/executive: load ALL roster cases + merge with latest entry scores + entry counts
     // Others: load latest entries for their program(s)
     let entries = [];
     if (isAdminOrExec) {
-      const [roster, latestEntries] = await Promise.all([
+      const [roster, latestEntries, subStats] = await Promise.all([
         API.get('/api/roster?active=false') || [],
         API.get(`/api/entries/latest?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`) || [],
+        API.get(`/api/submission-stats?_=1${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`) || {},
       ]);
       const entryMap = {};
       (latestEntries||[]).forEach(e => { entryMap[e.case_id] = e; });
+      const countMap = {};
+      ((subStats||{}).caseEntryCounts||[]).forEach(c => { countMap[c.case_id] = c; });
       entries = (roster||[]).map(r => ({
-        case_id:       r.case_id,
-        case_name:     r.case_name || '',
-        program_id:    r.program_id || '',
-        case_planner:  r.planner_name || '',
-        week_ending:   entryMap[r.case_id]?.week_ending || '',
-        weekly_score:  entryMap[r.case_id]?.weekly_score ?? null,
-        monthly_score: entryMap[r.case_id]?.monthly_score ?? null,
+        case_id:         r.case_id,
+        case_name:       r.case_name || '',
+        program_id:      r.program_id || '',
+        case_planner:    r.planner_name || '',
+        week_ending:     entryMap[r.case_id]?.week_ending || '',
+        weekly_score:    entryMap[r.case_id]?.weekly_score ?? null,
+        monthly_score:   entryMap[r.case_id]?.monthly_score ?? null,
         quarterly_score: entryMap[r.case_id]?.quarterly_score ?? null,
         lifetime_score:  entryMap[r.case_id]?.lifetime_score ?? null,
-        safety_flag:   entryMap[r.case_id]?.safety_flag || 'No',
-        fasp_status:   entryMap[r.case_id]?.fasp_status || 'Pending',
-        reviewed:      entryMap[r.case_id]?.reviewed || false,
-        active:        r.active,
+        safety_flag:     entryMap[r.case_id]?.safety_flag || 'No',
+        fasp_status:     entryMap[r.case_id]?.fasp_status || 'Pending',
+        reviewed:        entryMap[r.case_id]?.reviewed || false,
+        active:          r.active,
         manually_assigned: r.manually_assigned,
-        open_date:     r.open_date || '',
-        end_date:      r.end_date || '',
-        has_entry:     !!entryMap[r.case_id],
+        open_date:       r.open_date || '',
+        end_date:        r.end_date || '',
+        has_entry:       !!entryMap[r.case_id],
+        entry_count:     parseInt(countMap[r.case_id]?.entry_count || 0),
+        first_entry:     countMap[r.case_id]?.first_entry || '',
+        last_entry:      countMap[r.case_id]?.last_entry || '',
       }));
     } else {
       let url = '/api/entries/latest?_=1';
@@ -319,7 +325,7 @@ const SharedViews = {
     UI.setContent(`
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Case ID</th><th>Case Name</th><th>Program</th><th>Case Planner</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Case ID</th><th>Case Name</th><th>Program</th><th>Case Planner</th><th>Entries</th><th>Last Entry</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th><th>Lifetime</th><th>Safety</th><th>FASP</th><th>Status</th><th></th></tr></thead>
           <tbody id="case-tbody"></tbody>
         </table>
       </div>`);
@@ -357,7 +363,12 @@ const SharedViews = {
           <td style="font-size:12px">${e.case_name||'—'}</td>
           <td style="font-size:11px;color:#888">${e.program_id||'—'}${e.manually_assigned?' <span class="badge badge-amber" style="font-size:9px">🔒</span>':''}</td>
           <td>${e.case_planner||'—'}</td>
-          <td style="color:#aaa;font-size:12px">${e.week_ending||'No entries yet'}</td>
+          <td style="text-align:center">
+            ${e.entry_count>0
+              ? `<span style="font-weight:700;color:#1B3A5C">${e.entry_count}</span>`
+              : '<span class="badge badge-amber">0</span>'}
+          </td>
+          <td style="color:#aaa;font-size:12px">${e.last_entry||e.week_ending||'—'}</td>
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.weekly_score)}</td>
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.monthly_score)}</td>
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.quarterly_score)}</td>
@@ -370,7 +381,7 @@ const SharedViews = {
             <button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Note</button>
           </td>
         </tr>`).join('')
-      : '<tr><td colspan="13" class="empty-state">No cases match filters</td></tr>';
+      : '<tr><td colspan="14" class="empty-state">No cases match filters</td></tr>';
   },
 
   // ── SUPERVISION LOG ────────────────────────────────────────

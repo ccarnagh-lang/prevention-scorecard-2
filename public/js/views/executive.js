@@ -88,12 +88,15 @@ const ExecViews = {
         <div class="card"><div class="card-title">Score trend</div>
           <div style="position:relative;height:200px"><canvas id="c-exec-trend">Trend data.</canvas></div></div>
       </div>
-      <div class="section-head">Children compliance</div>
+      <div class="section-head">Submission activity</div>
+      <div id="submission-stats-section"><div class="loading" style="padding:12px">Loading submission data...</div></div>
+      <div class="section-head" style="margin-top:18px">Children compliance</div>
       <div id="children-compliance-section"></div>
       <div class="section-head" style="margin-top:18px">All programs</div>
       <div id="prog-list"></div>
     `);
 
+    ExecViews.renderSubmissionStats(progId || null, dateFrom, dateTo);
     ExecViews.renderChildrenCompliance(progId || null);
 
     if (progs.length) {
@@ -132,6 +135,160 @@ const ExecViews = {
           </div>
         </div>`).join('');
     }
+  },
+
+  async renderSubmissionStats(programId, dateFrom, dateTo) {
+    const el = document.getElementById('submission-stats-section');
+    if (!el) return;
+
+    let url = '/api/submission-stats?_=1';
+    if (programId) url += `&program_id=${encodeURIComponent(programId)}`;
+    if (dateFrom)  url += `&date_from=${dateFrom}`;
+    if (dateTo)    url += `&date_to=${dateTo}`;
+
+    const data = await API.get(url) || {};
+    const weekly  = data.weeklySubmissions || [];
+    const totals  = data.totals || {};
+
+    // Active tab state
+    ExecViews._subTab = ExecViews._subTab || 'weekly';
+
+    el.innerHTML = `
+      <div class="metric-grid-3" style="margin-bottom:14px">
+        <div class="mc"><div class="mc-label">Total entries submitted</div><div class="mc-value" style="color:#1B3A5C">${totals.total_entries||0}</div><div class="mc-sub">${dateFrom||dateTo?'In date range':'All time'}</div></div>
+        <div class="mc"><div class="mc-label">Cases with entries</div><div class="mc-value" style="color:#0F6E56">${totals.cases_with_entries||0}</div><div class="mc-sub">of all active cases</div></div>
+        <div class="mc"><div class="mc-label">Weeks covered</div><div class="mc-value" style="color:#534AB7">${totals.weeks_covered||0}</div><div class="mc-sub">submission weeks</div></div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="tab-bar" style="margin-bottom:0">
+          <div class="tab active" onclick="ExecViews.switchSubTab('weekly',this)">Weekly view</div>
+          <div class="tab" onclick="ExecViews.switchSubTab('monthly',this)">Monthly rollup</div>
+          <div class="tab" onclick="ExecViews.switchSubTab('quarterly',this)">Quarterly rollup</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div style="position:relative;height:220px"><canvas id="c-submissions" role="img" aria-label="Submission activity chart">Submission data.</canvas></div>
+      </div>
+
+      <div id="submission-table-section"></div>
+    `;
+
+    ExecViews._subData = weekly;
+    ExecViews.renderSubChart('weekly');
+    ExecViews.renderSubTable('weekly');
+  },
+
+  groupByPeriod(weekly, period) {
+    const grouped = {};
+    weekly.forEach(w => {
+      const date = new Date(w.week_ending);
+      let key;
+      if (period === 'monthly') {
+        key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+      } else if (period === 'quarterly') {
+        const q = Math.floor(date.getMonth()/3) + 1;
+        key = `${date.getFullYear()} Q${q}`;
+      } else {
+        key = w.week_ending;
+      }
+      if (!grouped[key]) grouped[key] = { label: key, submissions: 0, unique_cases: 0 };
+      grouped[key].submissions  += parseInt(w.submissions  || 0);
+      grouped[key].unique_cases += parseInt(w.unique_cases || 0);
+    });
+    return Object.values(grouped).sort((a,b) => a.label.localeCompare(b.label));
+  },
+
+  renderSubChart(period) {
+    const data    = ExecViews.groupByPeriod(ExecViews._subData || [], period);
+    const labels  = data.map(d => d.label);
+    const counts  = data.map(d => d.submissions);
+    const maxVal  = Math.max(...counts, 1);
+
+    if (window._subChart) { window._subChart.destroy(); }
+    const ctx = document.getElementById('c-submissions');
+    if (!ctx) return;
+
+    window._subChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Entries submitted',
+          data: counts,
+          backgroundColor: counts.map(v =>
+            v >= maxVal * 0.8 ? '#1D9E75' :
+            v >= maxVal * 0.5 ? '#534AB7' : '#E8ECF0'
+          ),
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.parsed.y} entries`,
+              afterLabel: ctx => {
+                const d = data[ctx.dataIndex];
+                return `${d.unique_cases} unique cases`;
+              }
+            }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { font: { size: 10 }, stepSize: 1 } },
+          x: { ticks: { font: { size: 10 }, maxRotation: 45 } }
+        }
+      }
+    });
+  },
+
+  renderSubTable(period) {
+    const tableEl = document.getElementById('submission-table-section');
+    if (!tableEl) return;
+    const data = ExecViews.groupByPeriod(ExecViews._subData || [], period);
+    if (!data.length) {
+      tableEl.innerHTML = '<div class="empty-state">No submissions in this period.</div>';
+      return;
+    }
+    const total = data.reduce((a,d) => a + d.submissions, 0);
+    tableEl.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>
+            <th>${period === 'weekly' ? 'Week ending' : period === 'monthly' ? 'Month' : 'Quarter'}</th>
+            <th>Entries submitted</th>
+            <th>Unique cases</th>
+            <th>% of total</th>
+            <th>Activity</th>
+          </tr></thead>
+          <tbody>
+            ${data.slice().reverse().map(d => {
+              const pct = total ? Math.round(d.submissions / total * 100) : 0;
+              const bar = `<div style="background:#E8ECF0;border-radius:3px;height:8px;width:100%"><div style="background:${pct>50?'#1D9E75':pct>25?'#534AB7':'#EF9F27'};border-radius:3px;height:8px;width:${pct}%"></div></div>`;
+              return `<tr>
+                <td class="mono" style="color:#1B3A5C;font-weight:600">${d.label}</td>
+                <td style="text-align:center;font-weight:600">${d.submissions}</td>
+                <td style="text-align:center">${d.unique_cases}</td>
+                <td style="text-align:center">${pct}%</td>
+                <td style="min-width:80px">${bar}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  },
+
+  switchSubTab(period, el) {
+    document.querySelectorAll('#submission-stats-section .tab').forEach(t => t.classList.remove('active'));
+    el?.classList.add('active');
+    ExecViews._subTab = period;
+    ExecViews.renderSubChart(period);
+    ExecViews.renderSubTable(period);
   },
 
   setPreset(preset) {
