@@ -1,3 +1,8 @@
+/**
+ * server/migrate.js
+ * Creates all tables. Safe to run multiple times.
+ * Called automatically on server start.
+ */
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -52,7 +57,6 @@ async function migrate() {
         case_name        TEXT,
         agency           TEXT,
         last_seen_upload TEXT,
-        manually_assigned BOOLEAN DEFAULT false,
         created_at       TIMESTAMPTZ DEFAULT NOW()
       )`);
 
@@ -161,17 +165,22 @@ async function migrate() {
 
     await client.query(`CREATE INDEX IF NOT EXISTS sessions_expire_idx ON sessions(expire)`);
 
+    // Safe column additions for existing deployments
     const addCol = async (table, col, type) => {
       await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(()=>{});
     };
-    await addCol('roster',  'end_date',           'TEXT');
-    await addCol('roster',  'wms_case_id',         'TEXT');
-    await addCol('roster',  'case_name',           'TEXT');
-    await addCol('roster',  'agency',              'TEXT');
-    await addCol('roster',  'last_seen_upload',    'TEXT');
-    await addCol('roster',  'manually_assigned',   'BOOLEAN DEFAULT false');
-    await addCol('entries', 'children_seen',       "JSONB DEFAULT '[]'");
+    await addCol('roster',  'end_date',         'TEXT');
+    await addCol('roster',  'wms_case_id',       'TEXT');
+    await addCol('roster',  'case_name',         'TEXT');
+    await addCol('roster',  'agency',            'TEXT');
+    await addCol('roster',  'last_seen_upload',  'TEXT');
+    await addCol('entries', 'children_seen',     "JSONB DEFAULT '[]'");
+    await addCol('roster',  'manually_assigned', 'BOOLEAN DEFAULT false');
+    await addCol('users',  'supervisor_id',    'INTEGER');
+    await addCol('users',  'director_id',      'INTEGER');
+    await addCol('users',  'title',            'TEXT');
 
+    // Create first admin account if no users exist
     const existing = await client.query('SELECT COUNT(*) as c FROM users');
     if (parseInt(existing.rows[0].c) === 0) {
       const bcrypt   = require('bcryptjs');

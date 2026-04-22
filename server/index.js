@@ -33,7 +33,7 @@ function requireRole(...roles) {
 }
 function requireAdmin(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
-  if (!['admin','executive'].includes(req.session.user.role)) return res.status(403).json({ error: 'Admin access required' });
+  if (!['admin','executive','office_manager'].includes(req.session.user.role)) return res.status(403).json({ error: 'Admin access required' });
   next();
 }
 
@@ -252,6 +252,30 @@ app.post('/api/supervision-log', requireAuth, requireRole('executive','admin','p
 app.put('/api/supervision-log/:id/resolve', requireAuth, async (req, res) => {
   try { await db.resolveSupervisionNote(req.params.id); res.json({ success: true }); }
   catch(e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/supervision-compliance', requireAuth, scopeProgram, async (req, res) => {
+  try {
+    const u = req.session.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
+    const progIds = isAdminOrExec ? null : req.programScopes;
+    res.json(await db.getSupervisionComplianceAlerts(progId, progIds));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Children not seen this month
+app.get('/api/children-not-seen-month', requireAuth, scopeProgram, async (req, res) => {
+  try {
+    const now   = new Date();
+    const month = parseInt(req.query.month) || now.getMonth() + 1;
+    const year  = parseInt(req.query.year)  || now.getFullYear();
+    const u = req.session.user;
+    const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
+    const progIds = isAdminOrExec ? null : req.programScopes;
+    res.json(await db.getChildrenNotSeenThisMonth(progId, progIds, month, year));
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/submission-stats', requireAuth, scopeProgram, async (req, res) => {

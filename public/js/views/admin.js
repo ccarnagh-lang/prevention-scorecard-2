@@ -149,29 +149,49 @@ const AdminViews = {
     }
   },
 
-  addUser() {
+  async addUser() {
+    const allUsers = await API.get('/api/admin/users') || [];
+    const supervisors = allUsers.filter(u => u.role === 'supervisor' && u.active);
+    const directors   = allUsers.filter(u => u.role === 'program_director' && u.active);
+
     UI.modal(`
       <div class="modal-title">Add new user</div>
-      <div class="grid-2">
-        <div class="field"><label>Full name</label><input type="text" id="au-name" placeholder="First Last"></div>
-        <div class="field"><label>Email address</label><input type="email" id="au-email" placeholder="name@agency.org"></div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Full name *</label><input type="text" id="au-name" placeholder="First Last"></div>
+        <div class="field"><label>Email address *</label><input type="email" id="au-email" placeholder="name@agency.org"></div>
       </div>
-      <div class="grid-2">
-        <div class="field"><label>Temporary password</label><input type="text" id="au-pw" placeholder="They can change this later"></div>
-        <div class="field"><label>Role</label>
-          <select id="au-role">
-            <option value="staff">Case Planner (staff)</option>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Temporary password *</label><input type="text" id="au-pw" placeholder="They can change this later"></div>
+        <div class="field"><label>Job title</label><input type="text" id="au-title" placeholder="e.g. Case Planner, LMSW"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Role *</label>
+          <select id="au-role" onchange="AdminViews.toggleUserFields()">
+            <option value="staff">Staff (Case Planner)</option>
             <option value="supervisor">Supervisor</option>
             <option value="program_director">Program Director</option>
+            <option value="office_manager">Office Manager</option>
             <option value="executive">Executive</option>
-          </select></div>
+            <option value="admin">System Admin</option>
+          </select>
+        </div>
+        <div class="field"><label>Program ID (comma-separated for multiple)</label><input type="text" id="au-prog" placeholder="e.g. B0G - TST, B0G - TT1"></div>
       </div>
-      <div class="field" style="margin-top:8px">
-        <label>Program ID (e.g. p1 — leave blank for executive)</label>
-        <input type="text" id="au-prog" placeholder="e.g. p1">
+      <div id="au-supervisor-field" style="margin-bottom:10px">
+        <div class="field"><label>Reports to supervisor</label>
+          <select id="au-supervisor">
+            <option value="">— None —</option>
+            ${supervisors.map(s=>`<option value="${s.id}">${s.name} (${s.program_id||'—'})</option>`).join('')}
+          </select>
+        </div>
       </div>
-      <div style="font-size:11px;color:#888;margin-top:10px;padding:8px;background:#F8F9FB;border-radius:6px">
-        The user logs in with this email and temporary password.
+      <div id="au-director-field" style="margin-bottom:10px;display:none">
+        <div class="field"><label>Reports to director</label>
+          <select id="au-director">
+            <option value="">— None —</option>
+            ${directors.map(d=>`<option value="${d.id}">${d.name} (${d.program_id||'—'})</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn" data-cancel>Cancel</button>
@@ -183,9 +203,18 @@ const AdminViews = {
         const pw    = document.getElementById('au-pw')?.value?.trim();
         const role  = document.getElementById('au-role')?.value;
         const prog  = document.getElementById('au-prog')?.value?.trim();
+        const title = document.getElementById('au-title')?.value?.trim();
+        const supId = document.getElementById('au-supervisor')?.value || null;
+        const dirId = document.getElementById('au-director')?.value   || null;
         if (!name || !email || !pw) { UI.toast('Name, email and password required', 'error'); return; }
         try {
-          await API.post('/api/admin/users', { name, email, password:pw, role, program_id:prog||null });
+          await API.post('/api/admin/users', {
+            name, email, password: pw, role,
+            program_id:   prog || null,
+            title:        title || null,
+            supervisor_id: supId ? parseInt(supId) : null,
+            director_id:   dirId ? parseInt(dirId) : null,
+          });
           UI.toast(`User ${name} created`, 'success');
           await AdminViews.render();
         } catch(e) { UI.toast('Failed: '+e.message, 'error'); }
@@ -193,31 +222,74 @@ const AdminViews = {
     );
   },
 
-  editUser(id, name, role, programId) {
+  toggleUserFields() {
+    const role = document.getElementById('au-role')?.value || document.getElementById('eu-role')?.value;
+    const supField = document.getElementById('au-supervisor-field') || document.getElementById('eu-supervisor-field');
+    const dirField = document.getElementById('au-director-field')   || document.getElementById('eu-director-field');
+    if (supField) supField.style.display = (role === 'staff') ? '' : 'none';
+    if (dirField) dirField.style.display = (role === 'supervisor') ? '' : 'none';
+  },
+
+  async editUser(id, name, role, programId) {
+    const allUsers    = await API.get('/api/admin/users') || [];
+    const thisUser    = allUsers.find(u => u.id === id) || {};
+    const supervisors = allUsers.filter(u => u.role === 'supervisor' && u.active && u.id !== id);
+    const directors   = allUsers.filter(u => u.role === 'program_director' && u.active && u.id !== id);
+
     UI.modal(`
       <div class="modal-title">Edit user — ${name}</div>
-      <div class="field" style="margin-bottom:10px"><label>Full name</label><input type="text" id="eu-name" value="${name}"></div>
-      <div class="field" style="margin-bottom:10px"><label>Role</label>
-        <select id="eu-role">
-          <option value="staff" ${role==='staff'?'selected':''}>Case Planner (staff)</option>
-          <option value="supervisor" ${role==='supervisor'?'selected':''}>Supervisor</option>
-          <option value="program_director" ${role==='program_director'?'selected':''}>Program Director</option>
-          <option value="executive" ${role==='executive'?'selected':''}>Executive</option>
-        </select></div>
-      <div class="field" style="margin-bottom:10px"><label>Program ID</label><input type="text" id="eu-prog" value="${programId}"></div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Full name</label><input type="text" id="eu-name" value="${name}"></div>
+        <div class="field"><label>Job title</label><input type="text" id="eu-title" value="${thisUser.title||''}"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Role</label>
+          <select id="eu-role" onchange="AdminViews.toggleUserFields()">
+            <option value="staff" ${role==='staff'?'selected':''}>Staff (Case Planner)</option>
+            <option value="supervisor" ${role==='supervisor'?'selected':''}>Supervisor</option>
+            <option value="program_director" ${role==='program_director'?'selected':''}>Program Director</option>
+            <option value="office_manager" ${role==='office_manager'?'selected':''}>Office Manager</option>
+            <option value="executive" ${role==='executive'?'selected':''}>Executive</option>
+            <option value="admin" ${role==='admin'?'selected':''}>System Admin</option>
+          </select>
+        </div>
+        <div class="field"><label>Program ID (comma-separated)</label><input type="text" id="eu-prog" value="${programId||''}"></div>
+      </div>
+      <div id="eu-supervisor-field" style="margin-bottom:10px;${role!=='staff'?'display:none':''}">
+        <div class="field"><label>Reports to supervisor</label>
+          <select id="eu-supervisor">
+            <option value="">— None —</option>
+            ${supervisors.map(s=>`<option value="${s.id}" ${thisUser.supervisor_id===s.id?'selected':''}>${s.name} (${s.program_id||'—'})</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div id="eu-director-field" style="margin-bottom:10px;${role!=='supervisor'?'display:none':''}">
+        <div class="field"><label>Reports to director</label>
+          <select id="eu-director">
+            <option value="">— None —</option>
+            ${directors.map(d=>`<option value="${d.id}" ${thisUser.director_id===d.id?'selected':''}>${d.name} (${d.program_id||'—'})</option>`).join('')}
+          </select>
+        </div>
+      </div>
       <div class="field" style="margin-bottom:10px"><label>Status</label>
-        <select id="eu-active"><option value="true">Active</option><option value="false">Inactive</option></select></div>
+        <select id="eu-active"><option value="true">Active</option><option value="false">Inactive</option></select>
+      </div>
       <div class="modal-footer">
         <button class="btn" data-cancel>Cancel</button>
         <button class="btn btn-p" data-confirm>Save changes</button>
       </div>`,
       async () => {
         try {
+          const supId = document.getElementById('eu-supervisor')?.value || null;
+          const dirId = document.getElementById('eu-director')?.value   || null;
           await API.put(`/api/admin/users/${id}`, {
-            name:       document.getElementById('eu-name')?.value,
-            role:       document.getElementById('eu-role')?.value,
-            program_id: document.getElementById('eu-prog')?.value||null,
-            active:     document.getElementById('eu-active')?.value==='true',
+            name:          document.getElementById('eu-name')?.value,
+            role:          document.getElementById('eu-role')?.value,
+            program_id:    document.getElementById('eu-prog')?.value || null,
+            title:         document.getElementById('eu-title')?.value || null,
+            active:        document.getElementById('eu-active')?.value === 'true',
+            supervisor_id: supId ? parseInt(supId) : null,
+            director_id:   dirId ? parseInt(dirId) : null,
           });
           UI.toast('User updated', 'success');
           await AdminViews.render();

@@ -877,11 +877,13 @@ const SharedViews = {
 
         if (!content) { UI.toast('Please fill in at least one section','error'); return; }
 
+        const logContent = sections.filter(s => s.val).map(s => `[${s.label}]\n${s.val}`).join('\n\n');
+        if (!logContent) { UI.toast('Please fill in at least one section','error'); return; }
         await API.post('/api/supervision-log', {
           program_id:  programId,
           staff_name:  staffVal,
           domain:      'Weekly Supervision Log',
-          content,
+          content:     logContent,
           action_item: document.getElementById('mn-action')?.value||null,
           due_date:    document.getElementById('mn-due')?.value||null,
           status:      document.getElementById('mn-status')?.value||'Open',
@@ -1306,4 +1308,275 @@ const SharedViews = {
       }
     );
   },
+
+  // ── STAFF DASHBOARD ───────────────────────────────────────
+  async renderStaffDash() {
+    UI.setTitle('My Dashboard');
+    const u   = Auth.user;
+    const pid = u.program_id;
+    const now = new Date();
+    const month = now.getMonth() + 1;
+    const year  = now.getFullYear();
+
+    const [entries, notSeen, supLogs, myNotes] = await Promise.all([
+      API.get(`/api/entries/latest${pid?'?program_id='+encodeURIComponent(pid):''}`)||[],
+      API.get(`/api/children-not-seen-month${pid?'?program_id='+encodeURIComponent(pid):''}&month=${month}&year=${year}`)||[],
+      API.get(`/api/supervision-log${pid?'?program_id='+encodeURIComponent(pid):''}`)||[],
+      API.get('/api/entries?limit=100'+(pid?'&program_id='+encodeURIComponent(pid):''))||[],
+    ]);
+
+    // Filter entries and logs for this staff member
+    const myEntries = (entries||[]).filter(e =>
+      e.case_planner === u.name || e.submitted_name === u.name
+    );
+    const myLogs = (supLogs||[]).filter(l => l.staff_name === u.name);
+    const myFlags = myEntries.filter(e => e.safety_flag === 'Yes');
+
+    // Metrics
+    const avgWeekly  = myEntries.length ? Math.round(myEntries.reduce((a,e)=>a+(e.weekly_score||0),0)/myEntries.length) : null;
+    const avgMonthly = myEntries.length ? Math.round(myEntries.reduce((a,e)=>a+(e.monthly_score||0),0)/myEntries.length) : null;
+
+    UI.setTopbar(`<span class="wpill">${u.name} — ${now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</span>`);
+
+    UI.setContent(`
+      <div class="metric-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px">
+        <div class="mc"><div class="mc-label">My cases</div><div class="mc-value">${myEntries.length}</div><div class="mc-sub">With entries</div></div>
+        <div class="mc"><div class="mc-label">Avg weekly score</div><div class="mc-value" style="color:${UI.scoreColor(avgWeekly)}">${avgWeekly!=null?avgWeekly+'%':'—'}</div></div>
+        <div class="mc"><div class="mc-label">Children not seen</div><div class="mc-value" style="color:${notSeen.length>0?'#A32D2D':'#0F6E56'}">${notSeen.length}</div><div class="mc-sub">This month</div></div>
+        <div class="mc"><div class="mc-label">Active safety flags</div><div class="mc-value" style="color:${myFlags.length>0?'#A32D2D':'#0F6E56'}">${myFlags.length}</div></div>
+      </div>
+
+      ${notSeen.length > 0 ? `
+      <div class="section-head">Children not seen this month</div>
+      <div class="table-wrap" style="margin-bottom:18px">
+        <table class="data-table">
+          <thead><tr><th>Child Name</th><th>CIN</th><th>Case</th><th>Case Name</th><th>Reason</th></tr></thead>
+          <tbody>${notSeen.map(c=>`<tr>
+            <td style="font-weight:600">${c.child_name||'—'}</td>
+            <td class="mono" style="font-size:11px">${c.cin||'—'}</td>
+            <td class="mono" style="color:#1B3A5C;font-weight:600">${c.case_id}</td>
+            <td style="font-size:12px">${c.case_name||'—'}</td>
+            <td style="font-size:12px;color:#888">${c.reason_not_seen||'—'}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : '<div class="empty-state" style="margin-bottom:18px">✓ All children seen this month</div>'}
+
+      ${myFlags.length > 0 ? `
+      <div class="section-head">Active safety flags on my cases</div>
+      <div class="table-wrap" style="margin-bottom:18px">
+        <table class="data-table">
+          <thead><tr><th>Case ID</th><th>Case Name</th><th>Week</th><th>Flag</th></tr></thead>
+          <tbody>${myFlags.map(e=>`<tr>
+            <td class="mono bold" style="color:#A32D2D">${e.case_id}</td>
+            <td style="font-size:12px">${e.case_name||'—'}</td>
+            <td style="font-size:12px;color:#aaa">${e.week_ending||'—'}</td>
+            <td><span class="badge badge-red" style="cursor:pointer" onclick="SharedViews.showSafetyFlagDetail('${e.case_id}')">⚠ Flag</span></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : ''}
+
+      <div class="section-head">My supervision logs</div>
+      ${myLogs.length ? myLogs.slice(0,10).map(l => {
+        const sections = SharedViews.parseLogContent(l.content) || {};
+        const date = sections['Date of Supervision'] || l.created_at?.slice(0,10) || '—';
+        const sectionOrder = ['Highlights and Major Accomplishments','Administrative/Staff Challenges','High Risk Cases','Follow-ups for Next Supervision'];
+        return `<div style="border:1px solid #E8ECF0;border-radius:8px;padding:12px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:12px;font-weight:700;color:#1B3A5C">Supervision log — ${date}</div>
+            <div style="font-size:11px;color:#888">By ${l.author_name||'—'}</div>
+          </div>
+          ${sectionOrder.filter(k=>sections[k]).map(k=>`
+            <div style="margin-bottom:6px">
+              <div style="font-size:10px;font-weight:700;color:#534AB7;text-transform:uppercase;margin-bottom:2px">${k}</div>
+              <div style="font-size:12px;color:#333">${(sections[k]||'').split('\n').join('<br>')}</div>
+            </div>`).join('')}
+          ${l.action_item?`<div class="thread-action">Action: ${l.action_item}${l.due_date?' — due '+l.due_date:''}</div>`:''}
+        </div>`;
+      }).join('') : '<div class="empty-state">No supervision logs on file yet.</div>'}
+
+      <div class="section-head" style="margin-top:14px">My case entries</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Case ID</th><th>Case Name</th><th>Week</th><th>Weekly</th><th>Monthly</th><th>Safety</th><th>FASP</th></tr></thead>
+          <tbody>${myEntries.length ? myEntries.map(e=>`<tr>
+            <td class="mono bold" style="color:#1B3A5C;cursor:pointer" onclick="SharedViews.openCaseReview('${e.case_id}')">${e.case_id}</td>
+            <td style="font-size:12px">${e.case_name||'—'}</td>
+            <td style="font-size:12px;color:#aaa">${e.week_ending||'—'}</td>
+            <td>${UI.badge(e.weekly_score)}</td>
+            <td>${UI.badge(e.monthly_score)}</td>
+            <td>${e.safety_flag==='Yes'?`<span class="badge badge-red" style="cursor:pointer" onclick="SharedViews.showSafetyFlagDetail('${e.case_id}')">⚠ Flag</span>`:'<span class="badge badge-gray">—</span>'}</td>
+            <td>${UI.faspBadge(e.fasp_status)}</td>
+          </tr>`).join('') : '<tr><td colspan="7" class="empty-state">No entries yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `);
+  },
+
+  // ── MY SUPERVISION LOG (staff read-only) ──────────────────
+  async renderMyLog() {
+    UI.setTitle('My Supervision Log');
+    const u   = Auth.user;
+    const pid = u.program_id;
+    const [supLogs] = await Promise.all([
+      API.get(`/api/supervision-log${pid?'?program_id='+encodeURIComponent(pid):''}`)||[],
+    ]);
+    const myLogs = (supLogs||[]).filter(l => l.staff_name === u.name)
+      .sort((a,b) => b.created_at.localeCompare(a.created_at));
+
+    UI.setTopbar(`<span class="wpill">${u.name} — Read only</span>`);
+    UI.setContent(`
+      <div style="font-size:12px;color:#888;margin-bottom:14px;padding:8px 12px;background:#F0F4F8;border-radius:6px">
+        These are your supervision records. Contact your supervisor to make any changes.
+      </div>
+      ${myLogs.length ? myLogs.map(l => {
+        const sections = SharedViews.parseLogContent(l.content) || {};
+        const date = sections['Date of Supervision'] || l.created_at?.slice(0,10) || '—';
+        const sectionOrder = ['Highlights and Major Accomplishments','Administrative/Staff Challenges','High Risk Cases','Low Engagement / Children Not Seen','FASP Due This Month','Families/Children Opened This Week','Cases Closed/Children Discharged','Case Updates from Previous Supervision','How Staff is Feeling in Role','Support Needed','Clinically/Administratively Curious About','Follow-ups for Next Supervision'];
+        return `<div style="border:1px solid #E8ECF0;border-radius:8px;padding:14px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f0f4f8">
+            <div style="font-size:13px;font-weight:700;color:#1B3A5C">Supervision log — ${date}</div>
+            <div>
+              <span style="font-size:11px;color:#888">Supervisor: <strong>${l.author_name||'—'}</strong></span>
+              ${l.action_item?`<span class="badge badge-amber" style="margin-left:8px">Action required</span>`:''}
+            </div>
+          </div>
+          ${sectionOrder.filter(k=>sections[k]).map(k=>`
+            <div style="margin-bottom:10px">
+              <div style="font-size:10px;font-weight:700;color:#534AB7;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">${k}</div>
+              <div style="font-size:12px;color:#333;line-height:1.5">${(sections[k]||'').split('\n').join('<br>')}</div>
+            </div>`).join('')}
+          ${l.action_item?`<div class="thread-action">Action: ${l.action_item}${l.due_date?' — due '+l.due_date:''}<span class="badge ${l.resolved?'badge-green':'badge-amber'}" style="margin-left:6px">${l.resolved?'Resolved':l.status||'Open'}</span></div>`:''}
+        </div>`;
+      }).join('') : '<div class="empty-state">No supervision logs on file yet.</div>'}
+    `);
+  },
+
+  // ── SUPERVISION COMPLIANCE ALERT ──────────────────────────
+  async renderSupComp(programId) {
+    UI.setTitle('Supervision Compliance');
+    const alerts = await API.get('/api/supervision-compliance'+(programId?`?program_id=${programId}`:''))||[];
+
+    UI.setTopbar(`
+      <span class="wpill">${alerts.length} staff without supervision log in past 2 weeks</span>`);
+
+    if (!alerts.length) {
+      UI.setContent('<div class="empty-state" style="color:#0F6E56">✓ All staff have supervision logs within the past 2 weeks.</div>');
+      return;
+    }
+
+    UI.setContent(`
+      <div style="font-size:12px;color:#791F1F;padding:10px 14px;background:#FFF3F3;border-radius:6px;border-left:4px solid #A32D2D;margin-bottom:16px;font-weight:600">
+        ⚠ The following staff members have not had a supervision log entered in the past 2 weeks. This is a supervision compliance concern.
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Staff Name</th><th>Program</th><th>Last Log Date</th><th>Days Since Last Log</th><th>Status</th><th></th></tr></thead>
+          <tbody>${alerts.map(a=>`<tr>
+            <td style="font-weight:600">${a.staff_name}</td>
+            <td style="font-size:12px">${a.program_id||'—'}</td>
+            <td style="font-size:12px;color:#aaa">${a.last_log||'Never'}</td>
+            <td style="text-align:center">
+              <span style="font-weight:700;color:${a.days_overdue>30?'#A32D2D':a.days_overdue>14?'#BA7517':'#555'}">${a.last_log?a.days_overdue+' days':'Never logged'}</span>
+            </td>
+            <td><span class="badge ${a.days_overdue>30?'badge-red':'badge-amber'}">
+              ${a.days_overdue>30?'Severely overdue':'Overdue'}
+            </span></td>
+            <td><button class="btn btn-xs" onclick="SharedViews.addSupNoteForStaff('${a.staff_name}','${programId||''}')">Add log now</button></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    `);
+  },
+
+  addSupNoteForStaff(staffName, programId) {
+    SharedViews._supStaff = SharedViews._supStaff || [{name: staffName}];
+    const orig = SharedViews._supStaff.find(s => s.name === staffName);
+    if (!orig) SharedViews._supStaff.push({name: staffName});
+    SharedViews.addSupNote(programId);
+    // Pre-select this staff member after modal opens
+    setTimeout(() => {
+      const sel = document.getElementById('mn-staff');
+      if (sel) { for(let o of sel.options) { if(o.value === staffName) { o.selected = true; break; } } }
+    }, 100);
+  },
+
+  // ── OFFICE MANAGER ROSTER ────────────────────────────────
+  async renderOfficeRoster(programId) {
+    UI.setTitle('Case Roster');
+    const pid = programId || Auth.user?.program_id;
+    const roster = await API.get('/api/roster?active=false'+(pid?`&program_id=${encodeURIComponent(pid)}`:''))||[];
+
+    UI.setTopbar(`
+      <button class="btn btn-p btn-sm" onclick="SharedViews.addOfficeCase('${pid||''}')">+ Add case</button>
+      <button class="btn btn-sm" onclick="window.open('/api/export/csv?mode=summary${pid?'&program_id='+encodeURIComponent(pid):''}','_blank')">Export roster</button>
+    `);
+
+    UI.setContent(`
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>
+            <th>CONN Case ID</th><th>WMS Case ID</th><th>Case Name (HOH)</th>
+            <th>Agency</th><th>Worker Name</th><th>Site-Unit</th>
+            <th>Stage Start</th><th>End Date</th><th>Children</th><th>Status</th>
+          </tr></thead>
+          <tbody>${roster.length ? roster.map(r=>`<tr>
+            <td class="mono bold" style="color:#1B3A5C">${r.case_id}</td>
+            <td class="mono" style="font-size:11px">${r.wms_case_id||'—'}</td>
+            <td>${r.case_name||'—'}</td>
+            <td style="font-size:12px">${r.agency||'—'}</td>
+            <td style="font-size:12px">${r.planner_name||'—'}</td>
+            <td style="font-size:11px;color:#888">${r.program_id||'—'}</td>
+            <td style="font-size:11px;color:#aaa">${r.open_date||'—'}</td>
+            <td style="font-size:11px;color:#aaa">${r.end_date||'—'}</td>
+            <td style="text-align:center">${r.children_count||0}</td>
+            <td>${r.active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-gray">Ended</span>'}</td>
+          </tr>`).join('') : '<tr><td colspan="10" class="empty-state">No cases on roster yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `);
+  },
+
+  addOfficeCase(programId) {
+    UI.modal(`
+      <div class="modal-title">Add case to roster</div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>CONN Case ID *</label><input type="text" id="oc-connid" placeholder="e.g. 12345678"></div>
+        <div class="field"><label>WMS Case ID</label><input type="text" id="oc-wmsid" placeholder="e.g. WMS-001"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Case Name (HOH)</label><input type="text" id="oc-name" placeholder="Last, First"></div>
+        <div class="field"><label>Agency</label><input type="text" id="oc-agency"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Worker Name</label><input type="text" id="oc-worker" placeholder="Case planner name"></div>
+        <div class="field"><label>Site-Unit</label><input type="text" id="oc-siteunit" value="${programId||''}" placeholder="e.g. B0G - TST"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="field"><label>Stage Start (Open Date)</label><input type="date" id="oc-start"></div>
+        <div class="field"><label>Children count</label><input type="number" id="oc-children" value="1" min="0"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn btn-p" data-confirm>Add case</button>
+      </div>`,
+      async () => {
+        const caseId = document.getElementById('oc-connid')?.value?.trim();
+        if (!caseId) { UI.toast('CONN Case ID required','error'); return; }
+        const siteUnit = document.getElementById('oc-siteunit')?.value?.trim() || programId;
+        await API.post('/api/roster', {
+          case_id:       caseId,
+          wms_case_id:   document.getElementById('oc-wmsid')?.value?.trim()||'',
+          case_name:     document.getElementById('oc-name')?.value?.trim()||'',
+          agency:        document.getElementById('oc-agency')?.value?.trim()||'',
+          planner_name:  document.getElementById('oc-worker')?.value?.trim()||'',
+          program_id:    siteUnit,
+          open_date:     document.getElementById('oc-start')?.value||'',
+          children_count: parseInt(document.getElementById('oc-children')?.value||1),
+        });
+        UI.toast('Case added to roster','success');
+        await SharedViews.renderOfficeRoster(programId);
+      }
+    );
+  },
+
 };

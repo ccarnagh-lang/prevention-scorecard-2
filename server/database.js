@@ -339,19 +339,21 @@ module.exports = {
   },
 
   async getAllUsers() {
-    return query('SELECT id,email,name,initials,role,program_id,active,created_at,last_login FROM users ORDER BY role,name');
+    return query('SELECT id,email,name,initials,role,program_id,supervisor_id,director_id,title,active,created_at,last_login FROM users ORDER BY role,name');
   },
   async createUser(data) {
     const hash = bcrypt.hashSync(data.password, 10);
     const initials = (data.initials || data.name.split(' ').map(p=>p[0]).join('').slice(0,2)).toUpperCase();
     return queryOne(
-      'INSERT INTO users (email,password,name,initials,role,program_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-      [data.email.toLowerCase().trim(), hash, data.name, initials, data.role, data.program_id || null]
+      'INSERT INTO users (email,password,name,initials,role,program_id,supervisor_id,director_id,title) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
+      [data.email.toLowerCase().trim(), hash, data.name, initials, data.role,
+       data.program_id || null, data.supervisor_id || null, data.director_id || null, data.title || null]
     );
   },
   async updateUser(id, data) {
-    await query('UPDATE users SET name=$1,role=$2,program_id=$3,active=$4 WHERE id=$5',
-      [data.name, data.role, data.program_id || null, data.active !== false, id]);
+    await query('UPDATE users SET name=$1,role=$2,program_id=$3,active=$4,supervisor_id=$5,director_id=$6,title=$7 WHERE id=$8',
+      [data.name, data.role, data.program_id || null, data.active !== false,
+       data.supervisor_id || null, data.director_id || null, data.title || null, id]);
   },
   async resetPassword(id, newPassword) {
     const hash = bcrypt.hashSync(newPassword, 10);
@@ -472,24 +474,34 @@ module.exports = {
   },
 
   async getChildrenNotSeenThisWeek(programId, programIds, weekEnding) {
+    // Delegates to monthly — "not seen this month" is the compliance standard
+    const d = weekEnding ? new Date(weekEnding) : new Date();
+    return this.getChildrenNotSeenThisMonth(programId, programIds, d.getMonth()+1, d.getFullYear());
+  },
+
+  async getChildrenNotSeenThisMonth(programId, programIds, month, year) {
+    const monthStr = `${year}-${String(month).padStart(2,'0')}`;
     let sql = `
       SELECT c.cin, c.child_name, c.dob, c.case_id, c.program_id,
         r.planner_name, r.case_name,
-        COALESCE(cs->>'seen', 'Not submitted') as seen_status,
-        COALESCE(cs->>'reason_not_seen', '') as reason_not_seen
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END)::int as times_seen,
+        MAX(CASE WHEN cs->>'seen' = 'Yes' THEN e.week_ending END) as last_seen,
+        COALESCE(string_agg(DISTINCT CASE WHEN cs->>'seen' != 'Yes' AND cs->>'reason_not_seen' IS NOT NULL THEN cs->>'reason_not_seen' END, '; '),'') as reason_not_seen
       FROM children c
       JOIN roster r ON c.case_id = r.case_id
-      LEFT JOIN entries e ON e.case_id = c.case_id AND e.week_ending = $1
+      LEFT JOIN entries e ON e.case_id = c.case_id AND e.week_ending LIKE $1
       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(e.children_seen,'[]')) cs ON cs->>'cin' = c.cin
-      WHERE c.active = true AND r.active = true
-        AND (cs->>'seen' IS NULL OR cs->>'seen' != 'Yes')`;
-    const params = [weekEnding];
+      WHERE c.active = true AND r.active = true`;
+    const params = [monthStr + '%'];
     if (programIds && programIds.length > 0) {
       sql += ` AND c.program_id = ANY($${params.push(programIds)})`;
     } else if (programId) {
       sql += ` AND c.program_id = $${params.push(programId)}`;
     }
-    sql += ' ORDER BY c.program_id, c.case_id, c.child_name';
+    sql += `
+      GROUP BY c.cin, c.child_name, c.dob, c.case_id, c.program_id, r.planner_name, r.case_name
+      HAVING COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) = 0
+      ORDER BY c.program_id, c.case_id, c.child_name`;
     return query(sql, params);
   },
 
@@ -765,6 +777,49 @@ module.exports = {
     ) || {};
 
     return { weeklySubmissions, caseEntryCounts, totals };
+  },
+
+  // Check for staff with no supervision log in past 2 weeks
+  async getSupervisionComplianceAlerts(programId, programIds) {
+    const twoWeeksAgo = new Date();
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+    const cutoff = twoWeeksAgo.toISOString().slice(0,10);
+
+    let sql = `SELECT id,name,role,program_id,supervisor_id FROM users
+               WHERE role IN ('staff','supervisor') AND active=true`;
+    const params = [];
+    if (programIds && programIds.length > 0) {
+      sql += ` AND program_id = ANY($${params.push(programIds)})`;
+    } else if (programId) {
+      sql += ` AND program_id = $${params.push(programId)}`;
+    }
+    const staff = await query(sql, params);
+
+    const alerts = [];
+    for (const s of staff) {
+      // Get their latest supervision log entry
+      const latest = await queryOne(
+        `SELECT created_at FROM supervision_log
+         WHERE staff_name=$1 AND created_at::date >= $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [s.name, cutoff]
+      );
+      if (!latest) {
+        // No log in past 2 weeks
+        const lastEver = await queryOne(
+          `SELECT created_at FROM supervision_log WHERE staff_name=$1 ORDER BY created_at DESC LIMIT 1`,
+          [s.name]
+        );
+        alerts.push({
+          staff_name:   s.name,
+          staff_id:     s.id,
+          program_id:   s.program_id,
+          last_log:     lastEver?.created_at?.slice(0,10) || null,
+          days_overdue: Math.floor((new Date() - new Date(lastEver?.created_at || new Date(0))) / (1000*60*60*24)),
+        });
+      }
+    }
+    return alerts;
   },
 
   async childrenToCSV(data) {

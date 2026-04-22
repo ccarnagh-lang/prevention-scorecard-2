@@ -55,9 +55,9 @@ const App = {
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-screen').classList.remove('hidden');
     const u = Auth.user;
-    const roleColors  = { executive:'#534AB7', program_director:'#0F6E56', supervisor:'#993C1D', staff:'#1B3A5C', admin:'#534AB7' };
-    const chipClasses = { executive:'chip-exec', program_director:'chip-dir', supervisor:'chip-sup', staff:'chip-staff', admin:'chip-exec' };
-    const chipLabels  = { executive:'Executive Access', program_director:'Program Director', supervisor:'Supervisor', staff:'Staff', admin:'System Admin' };
+    const roleColors  = { executive:'#534AB7', program_director:'#0F6E56', supervisor:'#993C1D', staff:'#1B3A5C', admin:'#534AB7', office_manager:'#2C6E8A' };
+    const chipClasses = { executive:'chip-exec', program_director:'chip-dir', supervisor:'chip-sup', staff:'chip-staff', admin:'chip-exec', office_manager:'chip-dir' };
+    const chipLabels  = { executive:'Executive Access', program_director:'Program Director', supervisor:'Supervisor', staff:'Staff', admin:'System Admin', office_manager:'Office Manager' };
     document.getElementById('sb-org').textContent     = (u.role==='executive'||u.role==='admin')?'All Programs':(u.program_id||'My Program');
     document.getElementById('sb-av').style.background = roleColors[u.role]||'#1B3A5C';
     document.getElementById('sb-av').textContent      = u.initials||UI.initials(u.name);
@@ -89,10 +89,11 @@ const App = {
     const navs = {
       executive: `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}`,
       admin:     `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}${sec('System')}${item('admin','Admin Panel')}`,
-      program_director: `${sec('My Program')}${item('dash','Case Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
+      program_director: `${sec('My Program')}${item('dash','Case Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${item('supcomp','Supervision Compliance')}${sec('Data')}${item('roster','Case Roster')}`,
       supervisor: `${sec('My Cases')}${item('dash','Case Dashboard')}${item('cases','All My Cases')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
       staff: `${sec('My Work')}${item('dash','My Dashboard')}${item('entry','New Entry')}`,
-      staff: `${sec('My Work')}${item('dash','My Dashboard')}`,
+      staff:          `${sec('My Work')}${item('dash','My Dashboard')}${item('mylog','My Supervision Log')}`,
+      office_manager: `${sec('Roster')}${item('roster','Case Roster')}`,
     };
     document.getElementById('sb-nav').innerHTML = navs[u.role] || navs.staff;
   },
@@ -100,7 +101,7 @@ const App = {
   async nav(viewId, el) {
     document.querySelectorAll('.sb-item').forEach(i => i.classList.remove('active'));
     (el || document.querySelector(`[data-nav="${viewId}"]`))?.classList.add('active');
-    const titles = { dash:'Dashboard',progs:'All Programs',cases:'Case List',entry:'New Entry',weekly:'This Week',suplog:'Weekly Supervision Log',supnote:'Monthly Supervisory Note',alerts:'Alerts',roster:'Case Roster',export:'Export Reports',admin:'Admin Panel' };
+    const titles = { dash:'Dashboard',cases:'Case List',entry:'New Entry',weekly:'This Week',suplog:'Weekly Supervision Log',supnote:'Monthly Supervisory Note',mylog:'My Supervision Log',alerts:'Alerts',roster:'Case Roster',export:'Export Reports',admin:'Admin Panel' };
     document.getElementById('tb-title').textContent = titles[viewId] || viewId;
     document.getElementById('main-content').innerHTML = '<div class="loading">Loading...</div>';
     const u   = Auth.user;
@@ -110,17 +111,24 @@ const App = {
         case 'dash':
           if(u.role==='executive'||u.role==='admin') await ExecViews.dashboard();
           else if(u.role==='program_director') await SupViews.dashboard();
+          else if(u.role==='staff') await SharedViews.renderStaffDash();
+          else if(u.role==='office_manager') await SharedViews.renderOfficeRoster(pid);
           else await SupViews.dashboard();
           break;
         case 'progs':   await ExecViews.dashboard(); break;
         case 'cases':   await SharedViews.renderCases(pid); break;
+        case 'mylog':   await SharedViews.renderMyLog(); break;
         case 'entry':   await SharedViews.renderEntry(); break;
         case 'weekly':  await SupViews.renderWeekly(pid); break;
         case 'suplog':  await SharedViews.renderSuplog(pid); break;
         case 'supnote': await SharedViews.renderSupnote(pid); break;
         case 'alerts':  await SharedViews.renderAlerts(pid); break;
-        case 'roster':  await SharedViews.renderRoster(pid); break;
+        case 'roster':
+          if(u.role==='office_manager') await SharedViews.renderOfficeRoster(pid);
+          else await SharedViews.renderRoster(pid);
+          break;
         case 'admin':   await AdminViews.render(); break;
+        case 'supcomp': await SharedViews.renderSupComp(pid); break;
         case 'export':
           UI.setTopbar(`<button class="btn btn-navy btn-sm" onclick="window.open('/api/export/csv?mode=full','_blank')">Export full CSV</button><button class="btn btn-sm" onclick="window.open('/api/export/csv?mode=summary','_blank')">Export summary CSV</button>`);
           UI.setContent(`<div class="chart-grid">
