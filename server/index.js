@@ -223,9 +223,9 @@ app.get('/api/entries/latest', requireAuth, scopeProgram, async (req, res) => {
 
 app.get('/api/staff', requireAuth, scopeProgram, async (req, res) => {
   try {
-    const pid = req.programScope || req.session.user.program_id;
-    if (!pid) return res.json([]);
-    res.json(await db.getStaff(pid, req.programScopes));
+    const u   = req.session.user;
+    const pid = req.programScope || u.program_id;
+    res.json(await db.getStaff(pid, req.programScopes, u.role, u.id));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -453,22 +453,33 @@ const SharedViews = {
 
   // ── SUPERVISION LOG ────────────────────────────────────────
   async renderSuplog(programId) {
-    UI.setTitle('Supervision Log');
+    UI.setTitle('Weekly Supervision Log');
+    const u = Auth.user;
+    const isDir = u.role === 'program_director' || u.role === 'executive' || u.role === 'admin';
+    const titleLabel = isDir ? 'All Supervisors' : 'All Staff';
+
     const [logs, staff] = await Promise.all([
       API.get('/api/supervision-log'+(programId?`?program_id=${programId}`:''))||[],
       API.get('/api/staff'+(programId?`?program_id=${programId}`:''))||[],
     ]);
+
+    // Filter logs to only those for direct reports
+    const directReportNames = new Set(staff.map(s => s.name));
+    const filteredLogs = logs.filter(l => directReportNames.has(l.staff_name));
+
     UI.setTopbar(`
       <select id="sl-staff" onchange="SharedViews.renderSuplogContent()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
-        <option value="">All staff</option>
-        ${staff.map(s=>`<option>${s.name}</option>`).join('')}
+        <option value="">${titleLabel}</option>
+        ${staff.map(s=>`<option value="${s.name}">${s.name}${s.role==='supervisor'?' (Supervisor)':''}</option>`).join('')}
       </select>
       <button class="btn btn-p btn-sm" onclick="SharedViews.addSupNote('${programId||''}')">+ Add log</button>`);
-    SharedViews._supLogs  = logs;
+
+    SharedViews._supLogs  = filteredLogs;
     SharedViews._supStaff = staff;
     SharedViews._currentProgramId = programId;
     this.renderSuplogContent();
   },
+
 
   parseLogContent(rawContent) {
     // Parse structured weekly log content into sections
@@ -559,18 +570,43 @@ const SharedViews = {
     const filterStaff = document.getElementById('sl-staff')?.value||'';
     const logs  = SharedViews._supLogs||[];
     const staff = SharedViews._supStaff||[];
-    const names = filterStaff?[filterStaff]:[...new Set(staff.map(s=>s.name))];
+    const u     = Auth.user;
+    const isDir = u.role === 'program_director' || u.role === 'executive' || u.role === 'admin';
+    const names = filterStaff ? [filterStaff] : [...new Set(staff.map(s=>s.name))];
+
+    if (!names.length) {
+      document.getElementById('main-content').innerHTML = `
+        <div class="empty-state">
+          <div style="font-size:14px;font-weight:600;margin-bottom:8px">No direct reports found</div>
+          <div style="font-size:12px;color:#aaa;max-width:400px;margin:0 auto">
+            ${isDir
+              ? 'No supervisors are mapped to you yet. Go to Admin Panel → edit each supervisor → set their "Reports to director" to your name.'
+              : 'No staff are mapped to you yet. Go to Admin Panel → edit each staff member → set their "Reports to supervisor" to your name.'}
+          </div>
+        </div>`;
+      return;
+    }
+
     let html = '';
     names.forEach(name => {
       const sdata = staff.find(s=>s.name===name);
       const sLogs = logs.filter(l=>l.staff_name===name).sort((a,b)=>b.created_at.localeCompare(a.created_at));
+      const roleLabel = sdata?.role === 'supervisor' ? 'Supervisor' : 'Staff';
+      const reportsTo = sdata?.supervisorName || sdata?.directorName || '—';
+
       html += `
         <div class="staff-section">
           <div class="staff-header">
             <div class="staff-info">
-              <div class="staff-av" style="background:#1B3A5C">${UI.initials(name)}</div>
-              <div><div class="staff-name">${name}</div>
-              <div class="staff-meta">${sdata?.cases||0} cases &nbsp;|&nbsp; ${sLogs.length} supervision log entries</div></div>
+              <div class="staff-av" style="background:${sdata?.role==='supervisor'?'#993C1D':'#1B3A5C'}">${UI.initials(name)}</div>
+              <div>
+                <div class="staff-name">${name} <span style="font-size:10px;font-weight:400;color:#aaa;margin-left:4px">${roleLabel}</span></div>
+                <div class="staff-meta">
+                  ${sdata?.cases||0} cases &nbsp;|&nbsp; ${sLogs.length} log entries
+                  ${sdata?.role==='staff'&&reportsTo!=='—'?` &nbsp;|&nbsp; Supervisor: ${reportsTo}`:''}
+                  ${sdata?.title?` &nbsp;|&nbsp; ${sdata.title}`:''}
+                </div>
+              </div>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
               ${sdata?.ws!=null?UI.badge(sdata.ws):''}
@@ -578,18 +614,20 @@ const SharedViews = {
             </div>
           </div>
           <div class="thread">
-            ${sLogs.length?sLogs.map(l=>{
-              const isMe=l.author_role==='supervisor'||l.author_role==='program_director'||l.author_role==='executive'||l.author_role==='admin';
+            ${sLogs.length ? sLogs.map(l=>{
+              const isMe = l.author_id === u.id ||
+                l.author_role==='supervisor'||l.author_role==='program_director'||
+                l.author_role==='executive'||l.author_role==='admin';
               return SharedViews.renderLogEntry(l, isMe);
-            }).join(''):'<div style="color:#aaa;font-size:12px;text-align:center;padding:12px">No weekly supervision logs yet. Click "+ Add log" to start.</div>'}
+            }).join('') : `<div style="color:#aaa;font-size:12px;text-align:center;padding:12px">No supervision logs yet for ${name}. Use "+ Add log" above.</div>`}
             <div class="thread-add">
-              <input type="text" id="note-input-${name.replace(/\s/g,'_')}" placeholder="Quick note...">
+              <input type="text" id="note-input-${name.replace(/\s/g,'_')}" placeholder="Quick note for ${name}...">
               <button class="btn btn-p btn-sm" onclick="SharedViews.postNote('${name}','${SharedViews._currentProgramId||''}')">Post</button>
             </div>
           </div>
         </div>`;
     });
-    document.getElementById('main-content').innerHTML = html || '<div class="empty-state">No staff found for this program.</div>';
+    document.getElementById('main-content').innerHTML = html;
     SharedViews._currentProgramId = SharedViews._currentProgramId || '';
   },
 
@@ -724,7 +762,7 @@ const SharedViews = {
 
         <div class="grid-2" style="margin-bottom:10px">
           <div class="field"><label>Staff member *</label>
-            <select id="mn-staff"><option value="">Select...</option>${staff.map(s=>`<option>${s.name}</option>`).join('')}</select>
+            <select id="mn-staff"><option value="">— Select ${Auth.user?.role==='program_director'?'supervisor':'staff member'} —</option>${staff.map(s=>`<option value="${s.name}">${s.name}${s.role==='supervisor'?' (Supervisor)':''}</option>`).join('')}</select>
           </div>
           <div class="field"><label>Date of supervision</label>
             <input type="date" id="mn-date" value="${today}" onchange="SharedViews.refreshAllCaseRows()">

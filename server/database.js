@@ -697,22 +697,66 @@ module.exports = {
     await query("UPDATE supervision_log SET resolved=true,status='Resolved',resolved_at=NOW() WHERE id=$1", [id]);
   },
 
-  async getStaff(programId, programIds) {
-    let sql = "SELECT id,name,initials,email,role,program_id FROM users WHERE role IN ('staff','supervisor','program_director') AND active=true";
+  async getStaff(programId, programIds, callerRole, callerId) {
+    // Scope direct reports by role:
+    // supervisor   → staff where supervisor_id = caller id
+    // director     → supervisors where director_id = caller id
+    //                + all staff under those supervisors
+    // admin/exec   → everyone in program
     const params = [];
-    if (programIds && programIds.length > 0) {
-      sql += ` AND program_id = ANY($${params.push(programIds)})`;
-    } else if (programId) {
-      sql += ` AND program_id = $${params.push(programId)}`;
+    let sql;
+
+    if (callerRole === 'supervisor') {
+      // Direct reports: staff assigned to this supervisor
+      sql = `SELECT id,name,initials,email,role,program_id,supervisor_id,director_id FROM users
+             WHERE role = 'staff' AND active=true AND supervisor_id = $${params.push(callerId)}`;
+    } else if (callerRole === 'program_director') {
+      // Direct reports: supervisors assigned to this director
+      // Plus: can cover for any staff in their program
+      sql = `SELECT id,name,initials,email,role,program_id,supervisor_id,director_id FROM users
+             WHERE active=true AND (
+               (role = 'supervisor' AND director_id = $${params.push(callerId)})
+               OR (role = 'staff' AND program_id = ANY(
+                 SELECT program_id FROM users WHERE id = $1
+               ))
+             )`;
+    } else {
+      // Admin/executive: all non-admin staff in program
+      sql = `SELECT id,name,initials,email,role,program_id,supervisor_id,director_id FROM users
+             WHERE role IN ('staff','supervisor') AND active=true`;
+      if (programIds && programIds.length > 0) {
+        sql += ` AND program_id = ANY($${params.push(programIds)})`;
+      } else if (programId) {
+        sql += ` AND program_id = $${params.push(programId)}`;
+      }
     }
+
+    sql += ' ORDER BY role DESC, name';
     const users = await query(sql, params);
+
     return Promise.all(users.map(async u => {
       const scores = await queryOne(
-        `SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms, ROUND(AVG(quarterly_score))::int as qs, COUNT(*) as entries FROM entries WHERE case_planner=$1 AND program_id=$2`,
+        `SELECT ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms,
+                ROUND(AVG(quarterly_score))::int as qs, COUNT(*) as entries
+         FROM entries WHERE case_planner=$1 AND program_id=$2`,
         [u.name, u.program_id]
       ) || {};
-      const cases = parseInt((await queryOne('SELECT COUNT(*) as c FROM roster WHERE planner_name=$1 AND program_id=$2 AND active=true', [u.name, u.program_id]))?.c || 0);
-      return { ...u, ...scores, cases };
+      const cases = parseInt((await queryOne(
+        'SELECT COUNT(*) as c FROM roster WHERE planner_name=$1 AND program_id=$2 AND active=true',
+        [u.name, u.program_id]
+      ))?.c || 0);
+      // Get their supervisor name if they are staff
+      let supervisorName = null;
+      if (u.supervisor_id) {
+        const sup = await queryOne('SELECT name FROM users WHERE id=$1', [u.supervisor_id]);
+        supervisorName = sup?.name || null;
+      }
+      let directorName = null;
+      if (u.director_id) {
+        const dir = await queryOne('SELECT name FROM users WHERE id=$1', [u.director_id]);
+        directorName = dir?.name || null;
+      }
+      return { ...u, ...scores, cases, supervisorName, directorName };
     }));
   },
 
