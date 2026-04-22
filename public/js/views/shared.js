@@ -333,6 +333,11 @@ const SharedViews = {
     this.filterCases();
   },
 
+  openCaseReview(caseId) {
+    sessionStorage.setItem('sn_case', caseId);
+    App.nav('supnote');
+  },
+
   setCaseDatePreset(preset) {
     const { from, to } = ExecViews.getDatePreset(preset);
     ExecViews._dateFrom = from;
@@ -359,7 +364,11 @@ const SharedViews = {
     );
     document.getElementById('case-tbody').innerHTML = filtered.length
       ? filtered.map(e=>`<tr>
-          <td class="mono bold" style="color:#1B3A5C">${e.case_id}</td>
+          <td class="mono bold" style="color:#1B3A5C">
+            ${['admin','executive','program_director','supervisor'].includes(Auth.user?.role)
+              ? `<a href="#" onclick="event.preventDefault();SharedViews.openCaseReview('${e.case_id}')" style="color:#1B3A5C;text-decoration:underline;cursor:pointer" title="Click to open monthly supervisory review">${e.case_id}</a>`
+              : e.case_id}
+          </td>
           <td style="font-size:12px">${e.case_name||'—'}</td>
           <td style="font-size:11px;color:#888">${e.program_id||'—'}${e.manually_assigned?' <span class="badge badge-amber" style="font-size:9px">🔒</span>':''}</td>
           <td>${e.case_planner||'—'}</td>
@@ -544,9 +553,113 @@ const SharedViews = {
     await this.renderSuplog(SharedViews._currentProgramId);
   },
 
-  addSupNote(programId) {
-    const staff = SharedViews._supStaff||[];
-    const today = new Date().toISOString().slice(0,10);
+  async populateCaseRow(rowIndex) {
+    const dateEl = document.getElementById('mn-date');
+    const sel    = document.getElementById(`mn-case-sel-${rowIndex}`);
+    const notSeenEl = document.getElementById(`mn-not-seen-${rowIndex}`);
+    const caseId = sel?.value;
+    if (!caseId || !notSeenEl) return;
+
+    // Get month/year from supervision date
+    const supDate = dateEl?.value ? new Date(dateEl.value) : new Date();
+    const month   = supDate.getMonth() + 1;
+    const year    = supDate.getFullYear();
+
+    notSeenEl.value = 'Loading...';
+    try {
+      const compliance = await API.get(`/api/children-compliance?month=${month}&year=${year}`) || [];
+      const caseCompliance = compliance.filter(c => c.case_id === caseId && c.compliance_status === 'Non-compliant');
+      if (caseCompliance.length === 0) {
+        notSeenEl.value = 'None';
+      } else {
+        notSeenEl.value = caseCompliance.map(c => c.child_name || c.cin).join(', ');
+      }
+    } catch(e) {
+      notSeenEl.value = '';
+    }
+  },
+
+  async refreshAllCaseRows() {
+    let i = 0;
+    while (document.getElementById(`mn-case-sel-${i}`) !== null) {
+      const sel = document.getElementById(`mn-case-sel-${i}`);
+      if (sel?.value) await SharedViews.populateCaseRow(i);
+      i++;
+    }
+  },
+
+  async addCaseRow(programId) {
+    const roster = SharedViews._lastRoster || await API.get('/api/roster' + (programId ? `?program_id=${programId}` : '')) || [];
+    SharedViews._lastRoster = roster;
+    const rosterOpts = roster.map(r =>
+      `<option value="${r.case_id}">${r.case_name || r.case_id}${r.planner_name ? ' — ' + r.planner_name : ''}</option>`
+    ).join('');
+    const tbody = document.getElementById('mn-case-rows');
+    if (!tbody) return;
+    let i = tbody.querySelectorAll('tr').length;
+    const tr = document.createElement('tr');
+    tr.id = `mn-row-${i}`;
+    tr.innerHTML = `
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-case-sel-${i}" onchange="SharedViews.populateCaseRow(${i})" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent;box-sizing:border-box">
+          <option value="">— Select case —</option>${rosterOpts}
+        </select>
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <input type="text" id="mn-contacts-${i}" placeholder="e.g. 4/1, 4/8" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box">
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <input type="text" id="mn-not-seen-${i}" placeholder="Auto-fills on case select" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box;color:#A32D2D">
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-risk-${i}" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent">
+          <option value="">—</option><option>High</option><option>Medium</option><option>Low</option>
+        </select>
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-eng-${i}" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent">
+          <option value="">—</option><option>High</option><option>Average</option><option>Low / difficult to contact</option>
+        </select>
+      </td>`;
+    tbody.appendChild(tr);
+  },
+
+  async addSupNote(programId) {
+    const staff   = SharedViews._supStaff || [];
+    const today   = new Date().toISOString().slice(0,10);
+
+    // Pre-load roster for this program
+    const roster = await API.get('/api/roster' + (programId ? `?program_id=${programId}` : '')) || [];
+    SharedViews._lastRoster = roster;
+    const rosterOpts = roster.map(r =>
+      `<option value="${r.case_id}">${r.case_name || r.case_id}${r.planner_name ? ' — ' + r.planner_name : ''}</option>`
+    ).join('');
+
+    const buildCaseRow = (i) => `<tr id="mn-row-${i}">
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-case-sel-${i}" onchange="SharedViews.populateCaseRow(${i})" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent;box-sizing:border-box">
+          <option value="">— Select case —</option>
+          ${rosterOpts}
+        </select>
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <input type="text" id="mn-contacts-${i}" placeholder="e.g. 4/1, 4/8" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box">
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <input type="text" id="mn-not-seen-${i}" placeholder="Auto-fills on case select" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box;color:#A32D2D">
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-risk-${i}" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent">
+          <option value="">—</option><option>High</option><option>Medium</option><option>Low</option>
+        </select>
+      </td>
+      <td style="border:1px solid #ddd;padding:2px">
+        <select id="mn-eng-${i}" style="width:100%;border:none;padding:4px;font-size:11px;background:transparent">
+          <option value="">—</option><option>High</option><option>Average</option><option>Low / difficult to contact</option>
+        </select>
+      </td>
+    </tr>`;
+
     UI.modal(`
       <div class="modal-title">Weekly Supervision Log</div>
       <div style="max-height:70vh;overflow-y:auto;padding-right:4px">
@@ -556,34 +669,32 @@ const SharedViews = {
             <select id="mn-staff"><option value="">Select...</option>${staff.map(s=>`<option>${s.name}</option>`).join('')}</select>
           </div>
           <div class="field"><label>Date of supervision</label>
-            <input type="date" id="mn-date" value="${today}">
+            <input type="date" id="mn-date" value="${today}" onchange="SharedViews.refreshAllCaseRows()">
           </div>
         </div>
 
         <div class="section-head" style="font-size:12px;margin:14px 0 8px">Case review table</div>
-        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter key case information reviewed during supervision</div>
-        <div style="overflow-x:auto;margin-bottom:10px">
+        <div style="font-size:11px;color:#888;margin-bottom:8px">
+          Select a case from the dropdown — children not seen this month will auto-populate in red.
+        </div>
+        <div style="overflow-x:auto;margin-bottom:6px">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
               <tr style="background:#f0f4f8">
-                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Case name</th>
-                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Dates of contact</th>
-                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Children not seen</th>
-                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Risk level</th>
-                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Engagement level</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;min-width:160px">Case name</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;min-width:100px">Dates of contact</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;min-width:140px">Children not seen this month</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;min-width:80px">Risk level</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;min-width:120px">Engagement level</th>
               </tr>
             </thead>
             <tbody id="mn-case-rows">
-              ${[1,2,3,4,5,6].map(i=>`<tr>
-                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="Last, First" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
-                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="e.g. 4/1, 4/8" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
-                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="Names or none" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
-                <td style="border:1px solid #ddd;padding:2px"><select style="width:100%;border:none;padding:4px;font-size:11px;background:transparent"><option value="">—</option><option>High</option><option>Medium</option><option>Low</option></select></td>
-                <td style="border:1px solid #ddd;padding:2px"><select style="width:100%;border:none;padding:4px;font-size:11px;background:transparent"><option value="">—</option><option>High</option><option>Average</option><option>Low / difficult to contact</option></select></td>
-              </tr>`).join('')}
+              ${[0,1,2,3,4,5].map(i => buildCaseRow(i)).join('')}
             </tbody>
           </table>
         </div>
+        <button class="btn btn-xs" onclick="SharedViews.addCaseRow('${programId||''}')">+ Add row</button>
+        <div style="font-size:10px;color:#aaa;margin-top:4px">Children not seen auto-fills based on the supervision date month.</div>
 
         <div class="section-head" style="font-size:12px;margin:14px 0 8px">Supervision discussion</div>
 
@@ -659,21 +770,29 @@ const SharedViews = {
         const staffVal = document.getElementById('mn-staff')?.value;
         if (!staffVal) { UI.toast('Please select a staff member','error'); return; }
 
-        // Collect case table rows
+        // Collect case table rows using named inputs
         const caseRows = [];
-        document.querySelectorAll('#mn-case-rows tr').forEach(tr => {
-          const cells = tr.querySelectorAll('input,select');
-          const caseName = cells[0]?.value?.trim();
-          if (caseName) {
+        let rowIndex = 0;
+        while (document.getElementById(`mn-case-sel-${rowIndex}`) !== null) {
+          const sel      = document.getElementById(`mn-case-sel-${rowIndex}`);
+          const contacts = document.getElementById(`mn-contacts-${rowIndex}`);
+          const notSeen  = document.getElementById(`mn-not-seen-${rowIndex}`);
+          const risk     = document.getElementById(`mn-risk-${rowIndex}`);
+          const eng      = document.getElementById(`mn-eng-${rowIndex}`);
+          const caseId   = sel?.value;
+          const caseName = sel?.options[sel.selectedIndex]?.text?.split(' — ')[0]?.trim();
+          if (caseId && caseName) {
             caseRows.push({
-              case_name:   caseName,
-              contacts:    cells[1]?.value?.trim()||'',
-              not_seen:    cells[2]?.value?.trim()||'',
-              risk:        cells[3]?.value||'',
-              engagement:  cells[4]?.value||'',
+              case_id:    caseId,
+              case_name:  caseName,
+              contacts:   contacts?.value?.trim() || '',
+              not_seen:   notSeen?.value?.trim()  || '',
+              risk:       risk?.value || '',
+              engagement: eng?.value  || '',
             });
           }
-        });
+          rowIndex++;
+        }
 
         // Build combined content from all sections
         const sections = [
@@ -717,22 +836,28 @@ const SharedViews = {
   },
 
   // ── SUPERVISORY NOTE ───────────────────────────────────────
+  // ── MONTHLY SUPERVISORY NOTE ─────────────────────────────
   async renderSupnote(programId) {
-    UI.setTitle('Supervisory Note');
-    const roster   = await API.get('/api/roster'+(programId?`?program_id=${programId}`:''))||[];
-    const preCase  = sessionStorage.getItem('sn_case')||'';
+    UI.setTitle('Monthly Supervisory Note');
+    const roster  = await API.get('/api/roster?active=false'+(programId?`&program_id=${programId}`:''))||[];
+    const preCase = sessionStorage.getItem('sn_case')||'';
     sessionStorage.removeItem('sn_case');
 
+    // Month picker — default to current month
+    const now = new Date();
+    const monthVal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+
     UI.setTopbar(`
-      <select id="sn-case" onchange="SharedViews.refreshNote()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+      <select id="sn-case" onchange="SharedViews.refreshNote()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px;min-width:200px">
         <option value="">— Select case —</option>
         ${roster.map(r=>`<option value="${r.case_id}" ${r.case_id===preCase?'selected':''}>${r.case_id}${r.case_name?' — '+r.case_name:''}</option>`).join('')}
       </select>
+      <input type="month" id="sn-month" value="${monthVal}" onchange="SharedViews.refreshNote()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
       <button class="btn btn-pu btn-sm" onclick="SharedViews.exportNote()">Export .docx</button>
       <button class="btn btn-sm" onclick="window.print()">Print PDF</button>`);
 
     UI.setContent(`
-      <div style="display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start">
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
         <div>
           <div class="form-card" style="margin-bottom:10px">
             <div class="fc-title">Note settings</div>
@@ -750,7 +875,7 @@ const SharedViews = {
             <div class="field" style="margin-bottom:10px"><label>Supervisor narrative</label><textarea id="sn-narr" rows="5" oninput="SharedViews.refreshNote()"></textarea></div>
             <div style="border-top:1px solid #F0F2F5;padding-top:12px">
               <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">E-signature</div>
-              <div class="field" style="margin-bottom:6px"><label>Type full name to sign</label><input type="text" id="sn-sig" placeholder="${Auth.user?.name||'Your name'}" oninput="SharedViews.refreshNote()" style="font-style:italic;font-size:14px"></div>
+              <div class="field"><label>Type full name to sign</label><input type="text" id="sn-sig" placeholder="${Auth.user?.name||'Your name'}" oninput="SharedViews.refreshNote()" style="font-style:italic;font-size:14px"></div>
             </div>
           </div>
           <button class="btn btn-pu btn-block" style="padding:11px;font-size:13px;margin-bottom:7px" onclick="SharedViews.exportNote()">Export as Word (.docx)</button>
@@ -759,13 +884,15 @@ const SharedViews = {
         </div>
         <div style="background:#fff;border:1px solid #E8ECF0;border-radius:10px;overflow:hidden">
           <div style="background:#1B3A5C;padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
-            <div><div style="font-size:13px;font-weight:600;color:#fff">Supervisory Case Note &amp; Compliance Report</div>
+            <div><div style="font-size:13px;font-weight:600;color:#fff">Monthly Supervisory Case Note &amp; Compliance Report</div>
               <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:2px">Prevention Services &nbsp;|&nbsp; CONFIDENTIAL</div></div>
-            <div style="text-align:right"><div style="font-size:10px;color:rgba(255,255,255,.4)">Case</div>
-              <div style="font-size:14px;font-weight:700;color:#fff" id="np-caseid">${preCase||'—'}</div></div>
+            <div style="text-align:right">
+              <div style="font-size:10px;color:rgba(255,255,255,.4)">Case</div>
+              <div style="font-size:14px;font-weight:700;color:#fff" id="np-caseid">${preCase||'—'}</div>
+            </div>
           </div>
           <div style="max-height:780px;overflow-y:auto;padding:20px;font-size:12px;line-height:1.6;color:#333" id="np-body">
-            <div class="empty-state">Select a case above to generate the supervisory note preview.</div>
+            <div class="empty-state">Select a case and month above to generate the monthly supervisory note.</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:#F8F9FB;border-top:1px solid #E8ECF0">
             <span style="font-size:11px;color:#aaa" id="np-status">Select a case to begin</span>
@@ -788,101 +915,169 @@ const SharedViews = {
   },
 
   async refreshNote() {
-    const caseId = document.getElementById('sn-case')?.value;
+    const caseId   = document.getElementById('sn-case')?.value;
+    const monthVal = document.getElementById('sn-month')?.value; // e.g. "2026-04"
     if (!caseId) return;
-    document.getElementById('np-caseid').textContent=caseId;
+    document.getElementById('np-caseid').textContent = caseId;
 
-    const [entries, rosterAll, children] = await Promise.all([
-      API.get(`/api/entries?case_id=${caseId}&limit=100`)||[],
+    // Build date range from selected month
+    let dateFrom = null, dateTo = null, monthLabel = '';
+    if (monthVal) {
+      const [y, m] = monthVal.split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate();
+      dateFrom   = `${y}-${String(m).padStart(2,'0')}-01`;
+      dateTo     = `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+      monthLabel = new Date(y, m-1, 1).toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    }
+
+    const [entries, rosterAll, children, supLogs] = await Promise.all([
+      API.get(`/api/entries?case_id=${caseId}&limit=100${dateFrom?'&date_from='+dateFrom:''}${dateTo?'&date_to='+dateTo:''}`)||[],
       API.get('/api/roster?active=false')||[],
       API.get(`/api/children/${caseId}`)||[],
+      API.get(`/api/supervision-log?case_id=${caseId}`)||[],
     ]);
 
-    const latest  = (entries||[])[0]||null;
-    const rc      = (rosterAll||[]).find(r=>r.case_id===caseId);
-    const resp    = latest?.responses||[];
-    const byId    = {}; resp.forEach(r=>{byId[r.id]=r;});
+    // Filter supervision logs to this month
+    const monthSupLogs = (supLogs||[]).filter(l => {
+      if (!monthVal) return true;
+      return l.created_at?.slice(0,7) === monthVal;
+    });
+
+    const rc     = (rosterAll||[]).find(r => r.case_id === caseId);
+    const latest = (entries||[])[0] || null;
+
+    // Aggregate scores across all entries in the month
+    const validEntries = (entries||[]).filter(e => e.weekly_score != null);
+    const avgWeekly    = validEntries.length ? Math.round(validEntries.reduce((a,e)=>a+(e.weekly_score||0),0)/validEntries.length) : null;
+    const avgMonthly   = validEntries.length ? Math.round(validEntries.reduce((a,e)=>a+(e.monthly_score||0),0)/validEntries.length) : null;
+    const avgQuarterly = validEntries.length ? Math.round(validEntries.reduce((a,e)=>a+(e.quarterly_score||0),0)/validEntries.length) : null;
+    const avgLifetime  = validEntries.length ? Math.round(validEntries.reduce((a,e)=>a+(e.lifetime_score||0),0)/validEntries.length) : null;
+
     const names   = REQS.nameMap();
-    const sup     = document.getElementById('sn-sup')?.value||Auth.user?.name||'';
-    const sig     = document.getElementById('sn-sig')?.value||'';
-    const narr    = document.getElementById('sn-narr')?.value||'';
-    const disc    = document.getElementById('sn-disc')?.value||'';
-    const dr      = SharedViews._discharge||false;
+    const sup     = document.getElementById('sn-sup')?.value || Auth.user?.name || '';
+    const sig     = document.getElementById('sn-sig')?.value || '';
+    const narr    = document.getElementById('sn-narr')?.value || '';
+    const disc    = document.getElementById('sn-disc')?.value || '';
+    const dr      = SharedViews._discharge || false;
     const today   = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
-    const ws      = latest?.weekly_score!=null?Math.round(latest.weekly_score)+'%':'—';
-    const ms      = latest?.monthly_score!=null?Math.round(latest.monthly_score)+'%':'—';
-    const qs      = latest?.quarterly_score!=null?Math.round(latest.quarterly_score)+'%':'—';
-    const ls      = latest?.lifetime_score!=null?Math.round(latest.lifetime_score)+'%':'—';
-    const sc      = latest?.weekly_score||0;
+    const sc      = avgWeekly || 0;
     const rating  = sc>=90?'Strong':sc>=75?'Adequate':'Needs Attention';
     const rBg     = sc>=90?'#EAF3DE':sc>=75?'#FAEEDA':'#FCEBEB';
     const rClr    = sc>=90?'#27500A':sc>=75?'#633806':'#791F1F';
-    const fasp    = latest?.fasp_status||'Pending';
-    const sf      = latest?.safety_flag||'No';
+    const fasp    = latest?.fasp_status || 'Pending';
+    const sf      = (entries||[]).some(e=>e.safety_flag==='Yes') ? 'Yes' : 'No';
+    const today_  = new Date();
+    const ageStr  = dob => { if(!dob)return'—'; const b=new Date(dob); const a=Math.floor((today_-b)/(365.25*24*60*60*1000)); return isNaN(a)?'—':a+' yrs'; };
 
-    const childrenSeen = latest?.children_seen||[];
-    const csMap={};
-    childrenSeen.forEach(c=>{csMap[c.cin]=c;});
+    // Aggregate children seen across all entries this month
+    const childSeenCounts = {};
+    (entries||[]).forEach(e => {
+      (e.children_seen||[]).forEach(cs => {
+        if (!childSeenCounts[cs.cin]) childSeenCounts[cs.cin] = { seen: 0, not_seen: 0, reasons: [] };
+        if (cs.seen === 'Yes') childSeenCounts[cs.cin].seen++;
+        else { childSeenCounts[cs.cin].not_seen++; if(cs.reason_not_seen) childSeenCounts[cs.cin].reasons.push(cs.reason_not_seen); }
+      });
+    });
+
+    // Best responses across all entries (most recent wins per req ID)
+    const byId = {};
+    [...(entries||[])].reverse().forEach(e => {
+      (e.responses||[]).forEach(r => { byId[r.id] = r; });
+    });
 
     const reqRow = id => {
-      const r=byId[id]||{};
+      const r = byId[id] || {};
       return `<tr><td class="mono" style="color:#534AB7;font-size:10px">${id}</td>
         <td style="font-size:11px">${names[id]||id}</td>
         <td><span style="padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:${r.response==='Yes'?'#EAF3DE':r.response==='No'?'#FCEBEB':r.response==='Some but not all'?'#FAEEDA':'#F5F7FA'};color:${r.response==='Yes'?'#27500A':r.response==='No'?'#791F1F':r.response==='Some but not all'?'#633806':'#aaa'}">${r.response||'—'}</span></td>
         <td style="font-size:11px;color:#555">${r.notes||''}</td></tr>`;
     };
 
-    const today_ = new Date();
-    const ageStr = dob => { if(!dob)return'—';const b=new Date(dob);const a=Math.floor((today_-b)/(365.25*24*60*60*1000));return isNaN(a)?'—':a+' yrs'; };
+    // Parse weekly supervision logs for this case/month
+    const parsedLogs = monthSupLogs.map(l => {
+      const sections = SharedViews.parseLogContent(l.content) || {};
+      return { date: l.created_at?.slice(0,10)||'', author: l.author_name||'', sections };
+    });
 
-    document.getElementById('np-body').innerHTML=`
-      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Case identification</div>
+    document.getElementById('np-body').innerHTML = `
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Case identification — ${monthLabel||'All time'}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 20px;margin-bottom:12px;font-size:12px">
-        ${[['Case ID',caseId],['Report date',today],['Case planner',rc?.planner_name||latest?.case_planner||'—'],['Supervisor',sup],['Program',rc?.program_id||'—'],['Case name',rc?.case_name||'—'],['FASP status',fasp],['Week ending',latest?.week_ending||'—']].map(([l,v])=>`<div><span style="color:#888;font-weight:600">${l}: </span><span>${v}</span></div>`).join('')}
+        ${[['Case ID',caseId],['Report month',monthLabel||'All time'],['Case planner',rc?.planner_name||latest?.case_planner||'—'],['Supervisor',sup],['Program',rc?.program_id||'—'],['Case name',rc?.case_name||'—'],['FASP status',fasp],['Entries this month',(entries||[]).length]].map(([l,v])=>`<div><span style="color:#888;font-weight:600">${l}: </span><span>${v}</span></div>`).join('')}
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
-        ${[['Weekly',ws,latest?.weekly_score],['Monthly',ms,null],['Quarterly',qs,null],['Lifetime',ls,null]].map(([l,v,s])=>`
+        ${[['Avg Weekly',avgWeekly],['Avg Monthly',avgMonthly],['Avg Quarterly',avgQuarterly],['Lifetime',avgLifetime]].map(([l,v])=>`
           <div style="background:#1B3A5C;border-radius:6px;padding:8px;text-align:center">
             <div style="font-size:9px;color:rgba(255,255,255,.4);margin-bottom:3px;font-weight:600">${l}</div>
-            <div style="font-size:18px;font-weight:700;color:${s!=null?(s>=90?'#5DCAA5':s>=75?'#FAC775':'#F09595'):'#A0C4E8'}">${v}</div>
+            <div style="font-size:18px;font-weight:700;color:${v!=null?(v>=90?'#5DCAA5':v>=75?'#FAC775':'#F09595'):'#A0C4E8'}">${v!=null?v+'%':'—'}</div>
           </div>`).join('')}
       </div>
-      <div style="padding:7px 12px;border-radius:6px;background:${rBg};color:${rClr};font-size:12px;font-weight:700;text-align:center;margin-bottom:14px">Overall Rating: ${rating}</div>
+      <div style="padding:7px 12px;border-radius:6px;background:${rBg};color:${rClr};font-size:12px;font-weight:700;text-align:center;margin-bottom:14px">Monthly Rating: ${sc>0?rating:'No entries this month'}</div>
+
+      ${(entries||[]).length>1?`
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Weekly entries this month</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">
+        <thead><tr style="background:#1B3A5C">${['Week ending','Submitted by','Weekly','Monthly','Safety','FASP'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-size:10px">${h}</th>`).join('')}</tr></thead>
+        <tbody>${(entries||[]).map(e=>`<tr style="border-bottom:1px solid #F0F2F5">
+          <td style="padding:5px 8px;font-family:monospace">${e.week_ending||'—'}</td>
+          <td style="padding:5px 8px">${e.submitted_name||e.case_planner||'—'}</td>
+          <td style="padding:5px 8px">${e.weekly_score!=null?Math.round(e.weekly_score)+'%':'—'}</td>
+          <td style="padding:5px 8px">${e.monthly_score!=null?Math.round(e.monthly_score)+'%':'—'}</td>
+          <td style="padding:5px 8px"><span style="color:${e.safety_flag==='Yes'?'#A32D2D':'#aaa'}">${e.safety_flag==='Yes'?'⚠ Flag':'—'}</span></td>
+          <td style="padding:5px 8px">${e.fasp_status||'—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>`:''}
 
       ${children.length>0?`
-      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Children in the home — seen status</div>
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Children — monthly contact summary</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">
-        <thead><tr style="background:#1B3A5C">${['Child Name','CIN','Age','Seen this week','Reason if not seen'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-size:10px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+        <thead><tr style="background:#1B3A5C">${['Child Name','CIN','Age','Times seen','Times not seen','Reasons not seen','Compliance'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-size:10px">${h}</th>`).join('')}</tr></thead>
         <tbody>${children.map(c=>{
-          const cs=csMap[c.cin]||{};
-          const seen=cs.seen||'Not recorded';
+          const cs = childSeenCounts[c.cin] || { seen:0, not_seen:0, reasons:[] };
+          const compliant = cs.seen >= 2;
           return `<tr style="border-bottom:1px solid #F0F2F5">
             <td style="padding:5px 8px;font-weight:600">${c.child_name||'—'}</td>
             <td style="padding:5px 8px;font-family:monospace;font-size:10px">${c.cin||'—'}</td>
             <td style="padding:5px 8px">${ageStr(c.dob)}</td>
-            <td style="padding:5px 8px"><span style="padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:${seen==='Yes'?'#EAF3DE':seen==='No'?'#FCEBEB':'#F5F7FA'};color:${seen==='Yes'?'#27500A':seen==='No'?'#791F1F':'#aaa'}">${seen}</span></td>
-            <td style="padding:5px 8px;font-size:11px;color:#888">${cs.reason_not_seen||'—'}</td>
+            <td style="padding:5px 8px;text-align:center;font-weight:700;color:#0F6E56">${cs.seen}</td>
+            <td style="padding:5px 8px;text-align:center;font-weight:700;color:${cs.not_seen>0?'#A32D2D':'#aaa'}">${cs.not_seen}</td>
+            <td style="padding:5px 8px;font-size:11px;color:#888">${cs.reasons.length?cs.reasons.join('; '):'—'}</td>
+            <td style="padding:5px 8px"><span style="padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:${compliant?'#EAF3DE':'#FCEBEB'};color:${compliant?'#27500A':'#791F1F'}">${compliant?'Compliant':'Non-compliant'}</span></td>
           </tr>`;
         }).join('')}</tbody>
       </table>`:''}
 
-      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Section A — weekly requirements</div>
+      ${parsedLogs.length>0?`
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Weekly supervision logs this month (${parsedLogs.length})</div>
+      ${parsedLogs.map(log => {
+        const s = log.sections;
+        const sectionOrder = ['Highlights and Major Accomplishments','Administrative/Staff Challenges','High Risk Cases','Low Engagement / Children Not Seen','FASP Due This Month','Families/Children Opened This Week','Cases Closed/Children Discharged','Case Updates from Previous Supervision','How Staff is Feeling in Role','Support Needed','Clinically/Administratively Curious About','Follow-ups for Next Supervision'];
+        return `<div style="border:1px solid #E8ECF0;border-radius:8px;padding:12px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:#1B3A5C;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f0f4f8">
+            Supervision log — ${log.sections['Date of Supervision']||log.date} &nbsp;|&nbsp; <span style="color:#888;font-weight:400">${log.author}</span>
+          </div>
+          ${sectionOrder.filter(k=>s[k]).map(k=>`
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;font-weight:700;color:#534AB7;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:2px">${k}</div>
+              <div style="font-size:12px;color:#333;line-height:1.5">${(s[k]||'').split('\n').join('<br>')}</div>
+            </div>`).join('')}
+        </div>`;
+      }).join('')}`:''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div style="padding:10px;border-radius:8px;background:${sf==='Yes'?'#FCEBEB':'#EAF3DE'}"><div style="font-size:10px;font-weight:700;color:${sf==='Yes'?'#791F1F':'#27500A'};margin-bottom:3px">Safety flag this month</div><div style="font-size:18px;font-weight:700;color:${sf==='Yes'?'#791F1F':'#27500A'}">${sf==='Yes'?'YES — Action required':'None'}</div></div>
+        <div style="padding:10px;border-radius:8px;background:${fasp==='Overdue'?'#FCEBEB':fasp==='Current'?'#EAF3DE':'#FAEEDA'}"><div style="font-size:10px;font-weight:700;color:${fasp==='Overdue'?'#791F1F':fasp==='Current'?'#27500A':'#633806'};margin-bottom:3px">FASP status</div><div style="font-size:18px;font-weight:700;color:${fasp==='Overdue'?'#791F1F':fasp==='Current'?'#27500A':'#633806'}">${fasp}</div></div>
+      </div>
+
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Scorecard compliance — ${monthLabel||'All entries'}</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">
         <thead><tr style="background:#1B3A5C">${['ID','Requirement','Response','Notes'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-weight:600;font-size:10px">${h}</th>`).join('')}</tr></thead>
         <tbody>${REQS.weekly.map(r=>reqRow(r.id)).join('')}</tbody>
       </table>
-
-      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Section B — monthly</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">
         <thead><tr style="background:#1B3A5C">${['ID','Requirement','Response','Notes'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-weight:600;font-size:10px">${h}</th>`).join('')}</tr></thead>
         <tbody>${REQS.monthly.map(r=>reqRow(r.id)).join('')}</tbody>
       </table>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-        <div style="padding:10px;border-radius:8px;background:${sf==='Yes'?'#FCEBEB':'#EAF3DE'}"><div style="font-size:10px;font-weight:700;color:${sf==='Yes'?'#791F1F':'#27500A'};margin-bottom:3px">Active safety flag</div><div style="font-size:18px;font-weight:700;color:${sf==='Yes'?'#791F1F':'#27500A'}">${sf==='Yes'?'YES — Action required':'None'}</div></div>
-        <div style="padding:10px;border-radius:8px;background:${fasp==='Overdue'?'#FCEBEB':fasp==='Current'?'#EAF3DE':'#FAEEDA'}"><div style="font-size:10px;font-weight:700;color:${fasp==='Overdue'?'#791F1F':fasp==='Current'?'#27500A':'#633806'};margin-bottom:3px">FASP status</div><div style="font-size:18px;font-weight:700;color:${fasp==='Overdue'?'#791F1F':fasp==='Current'?'#27500A':'#633806'}">${fasp}</div></div>
-      </div>
 
       <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Discharge readiness</div>
       <div style="display:grid;grid-template-columns:70px 1fr;gap:12px;background:#F8F9FB;border-radius:8px;padding:12px;margin-bottom:12px;align-items:center">
@@ -902,14 +1097,16 @@ const SharedViews = {
           <div><div style="border-top:1.5px solid #1B3A5C;padding-top:3px;margin-top:24px;font-size:15px;font-style:italic;font-family:Georgia,serif;color:#222;min-height:22px">${v}</div>
           <div style="font-size:10px;color:#aaa;margin-top:2px">${l}</div></div>`).join('')}
       </div>
-      <div style="margin-top:14px;padding-top:10px;border-top:1px solid #E8ECF0;font-size:10px;color:#ccc;font-style:italic">Generated: ${today} | Prevention Services Scorecard | Confidential</div>
+      <div style="margin-top:14px;padding-top:10px;border-top:1px solid #E8ECF0;font-size:10px;color:#ccc;font-style:italic">Generated: ${today} | Period: ${monthLabel||'All time'} | Prevention Services Scorecard | Confidential</div>
     `;
 
-    const statusEl=document.getElementById('np-status');
-    if(statusEl) statusEl.textContent=latest?`Ready to export — ${caseId} | ${latest.week_ending}`:'No entries yet for this case';
+    const statusEl = document.getElementById('np-status');
+    if (statusEl) statusEl.textContent = entries.length
+      ? `Ready to export — ${caseId} | ${monthLabel} | ${entries.length} entries`
+      : `No entries found for ${monthLabel}`;
   },
 
-  async exportNote() {
+    async exportNote() {
     const caseId=document.getElementById('sn-case')?.value;
     if (!caseId){UI.toast('Please select a case first','error');return;}
     try {

@@ -1,44 +1,4 @@
-const DirViews = {
-  async dashboard(data) {
-    const pid = Auth.user?.program_id;
-    const d = data || await API.get(`/api/dashboard${pid?'?program_id='+pid:''}`) || {};
-    const s = d.scores || {};
-    UI.setTopbar(`
-      <span class="wpill">Week ending ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
-      <button class="btn btn-p btn-sm" onclick="App.nav('entry')">+ New entry</button>
-      <button class="btn btn-sm" onclick="window.open('/api/export/csv${pid?'?program_id='+pid:''}','_blank')">Export CSV</button>`);
-    UI.setContent(`
-      <div class="metric-grid">
-        <div class="mc"><div class="mc-label">Program score</div><div class="mc-value" style="color:${UI.scoreColor(s.weekly)}">${s.weekly!=null?Math.round(s.weekly)+'%':'—'}</div><div class="mc-sub">${d.totalCases||0} active cases</div></div>
-        <div class="mc"><div class="mc-label">Monthly avg</div><div class="mc-value" style="color:${UI.scoreColor(s.monthly)}">${s.monthly!=null?Math.round(s.monthly)+'%':'—'}</div><div class="mc-sub">Current period</div></div>
-        <div class="mc"><div class="mc-label">Safety flags</div><div class="mc-value" style="color:#A32D2D">${d.safetyFlags||0}</div><div class="mc-sub">Requiring action</div></div>
-        <div class="mc"><div class="mc-label">FASP overdue</div><div class="mc-value" style="color:#BA7517">${d.faspOver||0}</div><div class="mc-sub">Submit to ACS</div></div>
-      </div>
-      <div class="chart-grid">
-        <div class="card"><div class="card-title">Case planner performance</div>
-          <div style="position:relative;height:190px"><canvas id="c-dir-staff" role="img" aria-label="Staff compliance bar chart">Staff data.</canvas></div></div>
-        <div class="card"><div class="card-title">Score trend — 12 weeks</div>
-          <div style="position:relative;height:190px"><canvas id="c-dir-trend" role="img" aria-label="Score trend line chart">Trend data.</canvas></div></div>
-      </div>
-      <div class="section-head">Case list</div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr><th>Case ID</th><th>Case Planner</th><th>Weekly</th><th>Monthly</th><th>Safety</th><th>FASP</th><th></th></tr></thead>
-          <tbody>${(d.caseScores||[]).length?(d.caseScores||[]).map(e=>`<tr>
-            <td class="mono bold" style="color:#1B3A5C">${e.case_id}</td>
-            <td>${e.case_planner||'—'}</td>
-            <td>${UI.badge(e.weekly_score)}</td><td>${UI.badge(e.monthly_score)}</td>
-            <td>${e.safety_flag==='Yes'?'<span class="badge badge-red">Flag</span>':'<span class="badge badge-gray">—</span>'}</td>
-            <td>${UI.faspBadge(e.fasp_status)}</td>
-            <td><button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Sup note</button></td>
-          </tr>`).join(''):'<tr><td colspan="7" class="empty-state">No cases yet — add cases in the Roster.</td></tr>'}</tbody>
-        </table>
-      </div>`);
-    if((d.byPlanner||[]).length){UI.mkChart('c-dir-staff',{type:'bar',data:{labels:(d.byPlanner||[]).map(p=>(p.case_planner||'').split(' ')[0]),datasets:[{label:'Weekly %',data:(d.byPlanner||[]).map(p=>p.ws||0),backgroundColor:(d.byPlanner||[]).map(p=>(p.ws||0)>=90?'#1D9E75':(p.ws||0)>=75?'#EF9F27':'#E24B4A'),borderRadius:5}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%',font:{size:10}}},x:{ticks:{font:{size:10}}}}}});}
-    if((d.trend||[]).length){UI.trendChart('c-dir-trend',d.trend,'#0F6E56');}
-  },
-  switchTab(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el?.classList.add('active');},
-};
+// Program Director view removed — supervisors handle case entries directly
 
 const SupViews = {
   async dashboard(data) {
@@ -97,7 +57,7 @@ const App = {
     const u = Auth.user;
     const roleColors  = { executive:'#534AB7', program_director:'#0F6E56', supervisor:'#993C1D', staff:'#1B3A5C', admin:'#534AB7' };
     const chipClasses = { executive:'chip-exec', program_director:'chip-dir', supervisor:'chip-sup', staff:'chip-staff', admin:'chip-exec' };
-    const chipLabels  = { executive:'Executive Access', program_director:'Program Director', supervisor:'Supervisor View', staff:'Case Planner', admin:'System Admin' };
+    const chipLabels  = { executive:'Executive Access', program_director:'Program Director', supervisor:'Supervisor', staff:'Staff', admin:'System Admin' };
     document.getElementById('sb-org').textContent     = (u.role==='executive'||u.role==='admin')?'All Programs':(u.program_id||'My Program');
     document.getElementById('sb-av').style.background = roleColors[u.role]||'#1B3A5C';
     document.getElementById('sb-av').textContent      = u.initials||UI.initials(u.name);
@@ -129,9 +89,10 @@ const App = {
     const navs = {
       executive: `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}`,
       admin:     `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}${sec('System')}${item('admin','Admin Panel')}`,
-      program_director: `${sec('My Program')}${item('dash','Program Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Oversight')}${item('suplog','Weekly Supervision Log')}${item('alerts','Alerts')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
-      supervisor: `${sec('My Cases')}${item('dash','Case Dashboard')}${item('weekly','This Week')}${item('cases','All My Cases')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
-      staff: `${sec('My Work')}${item('dash','My Dashboard')}${item('weekly','This Week')}${item('entry','New Entry')}`,
+      program_director: `${sec('My Program')}${item('dash','Case Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
+      supervisor: `${sec('My Cases')}${item('dash','Case Dashboard')}${item('cases','All My Cases')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
+      staff: `${sec('My Work')}${item('dash','My Dashboard')}${item('entry','New Entry')}`,
+      staff: `${sec('My Work')}${item('dash','My Dashboard')}`,
     };
     document.getElementById('sb-nav').innerHTML = navs[u.role] || navs.staff;
   },
@@ -148,7 +109,7 @@ const App = {
       switch(viewId) {
         case 'dash':
           if(u.role==='executive'||u.role==='admin') await ExecViews.dashboard();
-          else if(u.role==='program_director') await DirViews.dashboard();
+          else if(u.role==='program_director') await SupViews.dashboard();
           else await SupViews.dashboard();
           break;
         case 'progs':   await ExecViews.dashboard(); break;

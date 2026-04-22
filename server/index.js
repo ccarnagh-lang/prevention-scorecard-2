@@ -183,7 +183,7 @@ app.get('/api/entries', requireAuth, scopeProgram, async (req, res) => {
     }));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/entries', requireAuth, async (req, res) => {
+app.post('/api/entries', requireAuth, requireRole('executive','admin','program_director','supervisor'), async (req, res) => {
   try {
     const u = req.session.user;
     const entry = req.body;
