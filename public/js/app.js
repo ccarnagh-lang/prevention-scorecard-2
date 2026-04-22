@@ -129,8 +129,8 @@ const App = {
     const navs = {
       executive: `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}`,
       admin:     `${sec('Overview')}${item('dash','Executive Dashboard')}${item('progs','All Programs')}${item('cases','All Cases')}${sec('Reports')}${item('alerts','System Alerts')}${item('export','Export Reports')}${sec('System')}${item('admin','Admin Panel')}`,
-      program_director: `${sec('My Program')}${item('dash','Program Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Oversight')}${item('suplog','Supervision Log')}${item('alerts','Alerts')}${item('supnote','Supervisory Notes')}${sec('Data')}${item('roster','Case Roster')}`,
-      supervisor: `${sec('My Cases')}${item('dash','Case Dashboard')}${item('weekly','This Week')}${item('cases','All My Cases')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Supervision Log')}${item('supnote','Supervisory Notes')}${sec('Data')}${item('roster','Case Roster')}`,
+      program_director: `${sec('My Program')}${item('dash','Program Dashboard')}${item('cases','Case List')}${item('entry','New Entry')}${sec('Oversight')}${item('suplog','Weekly Supervision Log')}${item('alerts','Alerts')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
+      supervisor: `${sec('My Cases')}${item('dash','Case Dashboard')}${item('weekly','This Week')}${item('cases','All My Cases')}${item('entry','New Entry')}${sec('Supervision')}${item('suplog','Weekly Supervision Log')}${item('supnote','Monthly Supervisory Note')}${sec('Data')}${item('roster','Case Roster')}`,
       staff: `${sec('My Work')}${item('dash','My Dashboard')}${item('weekly','This Week')}${item('entry','New Entry')}`,
     };
     document.getElementById('sb-nav').innerHTML = navs[u.role] || navs.staff;
@@ -139,7 +139,7 @@ const App = {
   async nav(viewId, el) {
     document.querySelectorAll('.sb-item').forEach(i => i.classList.remove('active'));
     (el || document.querySelector(`[data-nav="${viewId}"]`))?.classList.add('active');
-    const titles = { dash:'Dashboard',progs:'All Programs',cases:'Case List',entry:'New Entry',weekly:'This Week',suplog:'Supervision Log',supnote:'Supervisory Notes',alerts:'Alerts',roster:'Case Roster',export:'Export Reports',admin:'Admin Panel' };
+    const titles = { dash:'Dashboard',progs:'All Programs',cases:'Case List',entry:'New Entry',weekly:'This Week',suplog:'Weekly Supervision Log',supnote:'Monthly Supervisory Note',alerts:'Alerts',roster:'Case Roster',export:'Export Reports',admin:'Admin Panel' };
     document.getElementById('tb-title').textContent = titles[viewId] || viewId;
     document.getElementById('main-content').innerHTML = '<div class="loading">Loading...</div>';
     const u   = Auth.user;

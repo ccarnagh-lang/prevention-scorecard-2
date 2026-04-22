@@ -396,11 +396,96 @@ const SharedViews = {
         <option value="">All staff</option>
         ${staff.map(s=>`<option>${s.name}</option>`).join('')}
       </select>
-      <button class="btn btn-p btn-sm" onclick="SharedViews.addSupNote('${programId||''}')">+ Add note</button>`);
+      <button class="btn btn-p btn-sm" onclick="SharedViews.addSupNote('${programId||''}')">+ Add log</button>`);
     SharedViews._supLogs  = logs;
     SharedViews._supStaff = staff;
     SharedViews._currentProgramId = programId;
     this.renderSuplogContent();
+  },
+
+  parseLogContent(rawContent) {
+    // Parse structured weekly log content into sections
+    if (!rawContent) return null;
+    const sections = {};
+    const parts = rawContent.split(/\n\n(?=\[)/);
+    parts.forEach(part => {
+      const match = part.match(/^\[([^\]]+)\]\n([\s\S]*)/);
+      if (match) {
+        sections[match[1]] = match[2].trim();
+      }
+    });
+    return Object.keys(sections).length > 0 ? sections : null;
+  },
+
+  renderCaseTable(jsonStr) {
+    try {
+      const rows = JSON.parse(jsonStr);
+      if (!rows.length) return '';
+      return `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:6px">
+        <thead><tr style="background:#f0f4f8">
+          <th style="padding:5px 7px;text-align:left;border:1px solid #ddd">Case name</th>
+          <th style="padding:5px 7px;text-align:left;border:1px solid #ddd">Dates of contact</th>
+          <th style="padding:5px 7px;text-align:left;border:1px solid #ddd">Children not seen</th>
+          <th style="padding:5px 7px;text-align:left;border:1px solid #ddd">Risk</th>
+          <th style="padding:5px 7px;text-align:left;border:1px solid #ddd">Engagement</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>`<tr>
+          <td style="padding:4px 7px;border:1px solid #ddd">${r.case_name||'—'}</td>
+          <td style="padding:4px 7px;border:1px solid #ddd">${r.contacts||'—'}</td>
+          <td style="padding:4px 7px;border:1px solid #ddd">${r.not_seen||'—'}</td>
+          <td style="padding:4px 7px;border:1px solid #ddd">${r.risk?`<span class="badge ${r.risk==='High'?'badge-red':r.risk==='Medium'?'badge-amber':'badge-green'}">${r.risk}</span>`:'—'}</td>
+          <td style="padding:4px 7px;border:1px solid #ddd">${r.engagement||'—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    } catch(e) { return `<div style="font-size:11px;color:#888">${jsonStr}</div>`; }
+  },
+
+  renderLogEntry(l, isMe) {
+    const sections = SharedViews.parseLogContent(l.content);
+    const sectionOrder = [
+      'Date of Supervision',
+      'Case Review Table',
+      'Highlights and Major Accomplishments',
+      'Administrative/Staff Challenges',
+      'High Risk Cases',
+      'Low Engagement / Children Not Seen',
+      'FASP Due This Month',
+      'Families/Children Opened This Week',
+      'Cases Closed/Children Discharged',
+      'Case Updates from Previous Supervision',
+      'How Staff is Feeling in Role',
+      'Support Needed',
+      'Clinically/Administratively Curious About',
+      'Follow-ups for Next Supervision',
+    ];
+
+    const bodyHtml = sections
+      ? sectionOrder.filter(k => sections[k]).map(k => `
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;font-weight:700;color:#1B3A5C;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">${k}</div>
+            <div style="font-size:12px;color:#333;line-height:1.5">
+              ${k === 'Case Review Table'
+                ? SharedViews.renderCaseTable(sections[k])
+                : sections[k].replace(/\n/g,'<br>')}
+            </div>
+          </div>`).join('')
+      : `<div class="thread-text">${l.content}</div>`;
+
+    return `<div class="thread-entry">
+      <div class="thread-av" style="background:${isMe?'#993C1D':'#1B3A5C'}">${UI.initials(l.author_name)}</div>
+      <div style="flex:1">
+        <div class="thread-bubble${isMe?' mine':''}">
+          <div class="thread-meta">
+            ${l.author_name} &nbsp;·&nbsp; ${l.author_role} &nbsp;·&nbsp; ${l.created_at?.slice(0,10)||''}
+            ${sections?'<span class="badge badge-blue" style="font-size:9px;margin-left:4px">Weekly Log</span>':''}
+          </div>
+          ${bodyHtml}
+          ${l.action_item?`<div class="thread-action">Action: ${l.action_item}${l.due_date?' — due '+l.due_date:''}<span class="badge ${l.status==='Open'?'badge-amber':'badge-green'}" style="margin-left:6px">${l.status}</span></div>`:''}
+        </div>
+        ${!l.resolved&&isMe?`<div style="margin-top:4px"><button class="btn btn-xs" onclick="SharedViews.resolveNote(${l.id})">Mark resolved</button></div>`:''}
+        ${l.resolved?`<div style="font-size:11px;color:#aaa;margin-top:4px">✓ Resolved ${l.resolved_at?.slice(0,10)||''}</div>`:''}
+      </div>
+    </div>`;
   },
 
   renderSuplogContent() {
@@ -418,37 +503,26 @@ const SharedViews = {
             <div class="staff-info">
               <div class="staff-av" style="background:#1B3A5C">${UI.initials(name)}</div>
               <div><div class="staff-name">${name}</div>
-              <div class="staff-meta">${sdata?.cases||0} cases &nbsp;|&nbsp; ${sLogs.length} supervision entries</div></div>
+              <div class="staff-meta">${sdata?.cases||0} cases &nbsp;|&nbsp; ${sLogs.length} supervision log entries</div></div>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
               ${sdata?.ws!=null?UI.badge(sdata.ws):''}
-              <button class="btn btn-p btn-xs" onclick="sessionStorage.setItem('sn_staff','${name}');App.nav('supnote')">Generate note</button>
+              <button class="btn btn-p btn-xs" onclick="sessionStorage.setItem('sn_staff','${name}');App.nav('supnote')">Monthly note</button>
             </div>
           </div>
           <div class="thread">
             ${sLogs.length?sLogs.map(l=>{
               const isMe=l.author_role==='supervisor'||l.author_role==='program_director'||l.author_role==='executive'||l.author_role==='admin';
-              return `<div class="thread-entry">
-                <div class="thread-av" style="background:${isMe?'#993C1D':'#1B3A5C'}">${UI.initials(l.author_name)}</div>
-                <div style="flex:1">
-                  <div class="thread-bubble${isMe?' mine':''}">
-                    <div class="thread-meta">${l.author_name} &nbsp;·&nbsp; ${l.author_role} &nbsp;·&nbsp; ${l.created_at?.slice(0,10)||''}${l.domain?` &nbsp;·&nbsp; ${l.domain}`:''}</div>
-                    <div class="thread-text">${l.content}</div>
-                    ${l.action_item?`<div class="thread-action">Action: ${l.action_item}${l.due_date?' — due '+l.due_date:''}</div>`:''}
-                  </div>
-                  ${!l.resolved&&isMe?`<div style="margin-top:4px"><button class="btn btn-xs" onclick="SharedViews.resolveNote(${l.id})">Mark resolved</button></div>`:''}
-                  ${l.resolved?`<div style="font-size:11px;color:#aaa;margin-top:4px">Resolved ${l.resolved_at?.slice(0,10)||''}</div>`:''}
-                </div>
-              </div>`;
-            }).join(''):'<div style="color:#aaa;font-size:12px;text-align:center;padding:12px">No supervision notes yet.</div>'}
+              return SharedViews.renderLogEntry(l, isMe);
+            }).join(''):'<div style="color:#aaa;font-size:12px;text-align:center;padding:12px">No weekly supervision logs yet. Click "+ Add log" to start.</div>'}
             <div class="thread-add">
-              <input type="text" id="note-input-${name.replace(/\s/g,'_')}" placeholder="Add a supervision note...">
+              <input type="text" id="note-input-${name.replace(/\s/g,'_')}" placeholder="Quick note...">
               <button class="btn btn-p btn-sm" onclick="SharedViews.postNote('${name}','${SharedViews._currentProgramId||''}')">Post</button>
             </div>
           </div>
         </div>`;
     });
-    document.getElementById('main-content').innerHTML = html || '<div class="empty-state">No staff found.</div>';
+    document.getElementById('main-content').innerHTML = html || '<div class="empty-state">No staff found for this program.</div>';
     SharedViews._currentProgramId = SharedViews._currentProgramId || '';
   },
 
@@ -472,35 +546,171 @@ const SharedViews = {
 
   addSupNote(programId) {
     const staff = SharedViews._supStaff||[];
+    const today = new Date().toISOString().slice(0,10);
     UI.modal(`
-      <div class="modal-title">Add supervision note</div>
-      <div class="grid-2">
-        <div class="field"><label>Staff member</label>
-          <select id="mn-staff"><option value="">Select...</option>${staff.map(s=>`<option>${s.name}</option>`).join('')}</select></div>
-        <div class="field"><label>Case ID (optional)</label><input type="text" id="mn-case" placeholder="QNS-2024-###"></div>
+      <div class="modal-title">Weekly Supervision Log</div>
+      <div style="max-height:70vh;overflow-y:auto;padding-right:4px">
+
+        <div class="grid-2" style="margin-bottom:10px">
+          <div class="field"><label>Staff member *</label>
+            <select id="mn-staff"><option value="">Select...</option>${staff.map(s=>`<option>${s.name}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Date of supervision</label>
+            <input type="date" id="mn-date" value="${today}">
+          </div>
+        </div>
+
+        <div class="section-head" style="font-size:12px;margin:14px 0 8px">Case review table</div>
+        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter key case information reviewed during supervision</div>
+        <div style="overflow-x:auto;margin-bottom:10px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:#f0f4f8">
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Case name</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Dates of contact</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Children not seen</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Risk level</th>
+                <th style="padding:6px 8px;text-align:left;border:1px solid #ddd;white-space:nowrap">Engagement level</th>
+              </tr>
+            </thead>
+            <tbody id="mn-case-rows">
+              ${[1,2,3,4,5,6].map(i=>`<tr>
+                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="Last, First" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
+                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="e.g. 4/1, 4/8" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
+                <td style="border:1px solid #ddd;padding:2px"><input type="text" placeholder="Names or none" style="width:100%;border:none;padding:4px;font-size:11px;box-sizing:border-box"></td>
+                <td style="border:1px solid #ddd;padding:2px"><select style="width:100%;border:none;padding:4px;font-size:11px;background:transparent"><option value="">—</option><option>High</option><option>Medium</option><option>Low</option></select></td>
+                <td style="border:1px solid #ddd;padding:2px"><select style="width:100%;border:none;padding:4px;font-size:11px;background:transparent"><option value="">—</option><option>High</option><option>Average</option><option>Low / difficult to contact</option></select></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-head" style="font-size:12px;margin:14px 0 8px">Supervision discussion</div>
+
+        <div class="field" style="margin-bottom:10px">
+          <label>Highlights and major accomplishments</label>
+          <textarea id="mn-highlights" rows="2" placeholder="Staff accomplishments and case wins this week..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Administrative / staff challenges</label>
+          <textarea id="mn-challenges" rows="2" placeholder="Any administrative or personal challenges..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>High risk cases</label>
+          <textarea id="mn-highrisk" rows="2" placeholder="Cases requiring elevated attention or escalation..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Cases with low engagement / children not seen (Preventive only)</label>
+          <textarea id="mn-loweng" rows="2" placeholder="Cases where contact or child visits are below threshold..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>FASP due this month (Preventive only)</label>
+          <textarea id="mn-fasp" rows="2" placeholder="FASPs coming due — case names and due dates..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Families / children opened this week</label>
+          <textarea id="mn-opened" rows="2" placeholder="New cases or children added to caseload..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Cases closed / children discharged this week</label>
+          <textarea id="mn-closed" rows="2" placeholder="Cases or children recently closed or discharged..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Case updates from previous supervision</label>
+          <textarea id="mn-updates" rows="2" placeholder="Follow-up on items from last supervision..."></textarea>
+        </div>
+
+        <div class="section-head" style="font-size:12px;margin:14px 0 8px">Staff wellbeing &amp; development</div>
+
+        <div class="field" style="margin-bottom:10px">
+          <label>How are you feeling in your role?</label>
+          <textarea id="mn-feeling" rows="2" placeholder="Staff's reflection on their experience and wellbeing..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Support needed</label>
+          <textarea id="mn-support" rows="2" placeholder="Resources, training, or support the staff member needs..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label>What are you curious about clinically / administratively?</label>
+          <textarea id="mn-curious" rows="2" placeholder="Areas of interest or learning the staff wants to explore..."></textarea>
+        </div>
+
+        <div class="section-head" style="font-size:12px;margin:14px 0 8px">Follow-up</div>
+
+        <div class="field" style="margin-bottom:10px">
+          <label>Follow-ups for next supervision / director comments</label>
+          <textarea id="mn-followup" rows="2" placeholder="Action items, reminders, and notes for next session..."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:4px">
+          <label>Action item (optional)</label>
+          <input type="text" id="mn-action" placeholder="Specific task to be completed before next supervision">
+        </div>
+        <div class="grid-2" style="margin-bottom:4px">
+          <div class="field"><label>Due date</label><input type="date" id="mn-due"></div>
+          <div class="field"><label>Status</label><select id="mn-status"><option>Open</option><option>In Progress</option></select></div>
+        </div>
       </div>
-      <div class="field" style="margin-bottom:10px"><label>Domain / Area</label><input type="text" id="mn-domain" placeholder="e.g. Safety/Risk — W9/W10"></div>
-      <div class="field" style="margin-bottom:10px"><label>Supervision note</label><textarea id="mn-content" rows="4" placeholder="Describe the finding or guidance..."></textarea></div>
-      <div class="field" style="margin-bottom:10px"><label>Action item (optional)</label><input type="text" id="mn-action" placeholder="What must be completed?"></div>
-      <div class="grid-2">
-        <div class="field"><label>Due date</label><input type="date" id="mn-due"></div>
-        <div class="field"><label>Status</label><select id="mn-status"><option>Open</option><option>In Progress</option></select></div>
-      </div>
+
       <div class="modal-footer">
         <button class="btn" data-cancel>Cancel</button>
-        <button class="btn btn-p" data-confirm>Save note</button>
+        <button class="btn btn-p" data-confirm>Save supervision log</button>
       </div>`,
       async () => {
-        const staff   = document.getElementById('mn-staff')?.value;
-        const content = document.getElementById('mn-content')?.value;
-        if (!staff||!content) { UI.toast('Staff and note required','error'); return; }
-        await API.post('/api/supervision-log', {
-          program_id: programId, case_id:document.getElementById('mn-case')?.value||null,
-          staff_name:staff, domain:document.getElementById('mn-domain')?.value,
-          content, action_item:document.getElementById('mn-action')?.value,
-          due_date:document.getElementById('mn-due')?.value, status:document.getElementById('mn-status')?.value,
+        const staffVal = document.getElementById('mn-staff')?.value;
+        if (!staffVal) { UI.toast('Please select a staff member','error'); return; }
+
+        // Collect case table rows
+        const caseRows = [];
+        document.querySelectorAll('#mn-case-rows tr').forEach(tr => {
+          const cells = tr.querySelectorAll('input,select');
+          const caseName = cells[0]?.value?.trim();
+          if (caseName) {
+            caseRows.push({
+              case_name:   caseName,
+              contacts:    cells[1]?.value?.trim()||'',
+              not_seen:    cells[2]?.value?.trim()||'',
+              risk:        cells[3]?.value||'',
+              engagement:  cells[4]?.value||'',
+            });
+          }
         });
-        UI.toast('Supervision note saved','success');
+
+        // Build combined content from all sections
+        const sections = [
+          { label: 'Date of Supervision', val: document.getElementById('mn-date')?.value },
+          { label: 'Case Review Table', val: caseRows.length ? JSON.stringify(caseRows) : '' },
+          { label: 'Highlights and Major Accomplishments', val: document.getElementById('mn-highlights')?.value },
+          { label: 'Administrative/Staff Challenges', val: document.getElementById('mn-challenges')?.value },
+          { label: 'High Risk Cases', val: document.getElementById('mn-highrisk')?.value },
+          { label: 'Low Engagement / Children Not Seen', val: document.getElementById('mn-loweng')?.value },
+          { label: 'FASP Due This Month', val: document.getElementById('mn-fasp')?.value },
+          { label: 'Families/Children Opened This Week', val: document.getElementById('mn-opened')?.value },
+          { label: 'Cases Closed/Children Discharged', val: document.getElementById('mn-closed')?.value },
+          { label: 'Case Updates from Previous Supervision', val: document.getElementById('mn-updates')?.value },
+          { label: 'How Staff is Feeling in Role', val: document.getElementById('mn-feeling')?.value },
+          { label: 'Support Needed', val: document.getElementById('mn-support')?.value },
+          { label: 'Clinically/Administratively Curious About', val: document.getElementById('mn-curious')?.value },
+          { label: 'Follow-ups for Next Supervision', val: document.getElementById('mn-followup')?.value },
+        ];
+
+        const content = sections
+          .filter(s => s.val)
+          .map(s => `[${s.label}]\n${s.val}`)
+          .join('\n\n');
+
+        if (!content) { UI.toast('Please fill in at least one section','error'); return; }
+
+        await API.post('/api/supervision-log', {
+          program_id:  programId,
+          staff_name:  staffVal,
+          domain:      'Weekly Supervision Log',
+          content,
+          action_item: document.getElementById('mn-action')?.value||null,
+          due_date:    document.getElementById('mn-due')?.value||null,
+          status:      document.getElementById('mn-status')?.value||'Open',
+          entry_type:  'weekly_log',
+        });
+        UI.toast('Weekly supervision log saved','success');
         await SharedViews.renderSuplog(programId);
       }
     );
