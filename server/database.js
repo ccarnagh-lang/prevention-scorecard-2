@@ -40,7 +40,10 @@ function addProgramFilter(baseSql, baseParams, programId, programIds, alias = ''
   return { sql, params };
 }
 
-function calcAllScores(responses) {
+function calcAllScores(responses, childrenSeenThisMonth = null, childrenSeenAllMonths = null) {
+  // childrenSeenThisMonth: bool — were all active children seen >= 1x this month?
+  // childrenSeenAllMonths: bool — have all children been seen every month for life of case?
+
   const score = cadence => {
     const items = responses.filter(r =>
       !r.unscored &&
@@ -50,15 +53,111 @@ function calcAllScores(responses) {
     if (!items.length) return null;
     return Math.round(items.filter(r => r.response === 'Yes').length / items.length * 100);
   };
-  const ws = score('weekly'), ms = score('monthly'), qs = score('quarterly');
-  const valid = [ws,ms,qs].filter(s => s != null);
-  const ls = valid.length ? Math.round(valid.reduce((a,b) => a+b, 0) / valid.length) : null;
+
+  const ws = score('weekly');
+  const ms = score('monthly');
+
+  // Quarterly: standard score, BUT cap at 99 if children not seen all 3 months
+  const qsRaw = score('quarterly');
+  let qs = qsRaw;
+  if (qsRaw === 100 && childrenSeenAllMonths === false) {
+    qs = 99; // Not truly 100 — children compliance failed
+  }
+
+  // Lifetime: average of weekly/monthly/quarterly, further penalized if
+  // children have not been seen every month since case opened
+  const valid = [ws, ms, qs].filter(s => s != null);
+  let ls = valid.length ? Math.round(valid.reduce((a,b) => a+b, 0) / valid.length) : null;
+  if (ls !== null && childrenSeenAllMonths === false) {
+    // Cap lifetime at 95 if children compliance has ever failed
+    ls = Math.min(ls, 95);
+  }
+
   const w9  = responses.find(r => r.id === 'W9');
   const w10 = responses.find(r => r.id === 'W10');
   const sf  = w9?.response === 'Yes' && (w10?.response === 'No' || w10?.response === 'Some but not all') ? 'Yes' : 'No';
   const q1  = responses.find(r => r.id === 'Q1');
   const fasp = q1?.response === 'Yes' ? 'Current' : q1?.response === 'No' ? 'Overdue' : 'Pending';
   return { ws, ms, qs, ls, sf, fasp };
+}
+
+// Check if all children in a case have been seen >= 1x per month
+// for every month from case open date through current month
+async function checkChildrenLifetimeCompliance(caseId, weekEnding) {
+  try {
+    // Get case open date
+    const roster = await queryOne('SELECT open_date, added_date FROM roster WHERE case_id=$1', [caseId]);
+    const startDate = roster?.open_date || roster?.added_date;
+    if (!startDate) return null; // Unknown — don't penalize
+
+    const start   = new Date(startDate);
+    const current = weekEnding ? new Date(weekEnding) : new Date();
+
+    // Build list of months from start to current
+    const months = [];
+    let d = new Date(start.getFullYear(), start.getMonth(), 1);
+    const endMonth = new Date(current.getFullYear(), current.getMonth(), 1);
+    while (d <= endMonth) {
+      months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+      d.setMonth(d.getMonth() + 1);
+    }
+
+    if (months.length === 0) return null;
+
+    // For each month, check if ALL active children were seen >= 1x
+    for (const month of months) {
+      const result = await queryOne(`
+        SELECT COUNT(*) as total,
+               COUNT(CASE WHEN seen_count >= 1 THEN 1 END) as compliant
+        FROM (
+          SELECT c.cin,
+                 COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) as seen_count
+          FROM children c
+          LEFT JOIN entries e ON e.case_id = $1 AND e.week_ending LIKE $2
+          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(e.children_seen,'[]')) cs
+            ON cs->>'cin' = c.cin
+          WHERE c.case_id = $1 AND c.active = true
+          GROUP BY c.cin
+        ) sub`,
+        [caseId, month + '%']
+      );
+      const total     = parseInt(result?.total || 0);
+      const compliant = parseInt(result?.compliant || 0);
+      if (total > 0 && compliant < total) return false; // At least one month failed
+    }
+    return true; // All months compliant
+  } catch(e) {
+    console.warn('[compliance check]', e.message);
+    return null;
+  }
+}
+
+// Check if children were seen >= 1x this month
+async function checkChildrenMonthlyCompliance(caseId, weekEnding) {
+  try {
+    const month = weekEnding ? weekEnding.slice(0,7) : new Date().toISOString().slice(0,7);
+    const result = await queryOne(`
+      SELECT COUNT(*) as total,
+             COUNT(CASE WHEN seen_count >= 1 THEN 1 END) as compliant
+      FROM (
+        SELECT c.cin,
+               COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) as seen_count
+        FROM children c
+        LEFT JOIN entries e ON e.case_id = $1 AND e.week_ending LIKE $2
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(e.children_seen,'[]')) cs
+          ON cs->>'cin' = c.cin
+        WHERE c.case_id = $1 AND c.active = true
+        GROUP BY c.cin
+      ) sub`,
+      [caseId, month + '%']
+    );
+    const total     = parseInt(result?.total || 0);
+    const compliant = parseInt(result?.compliant || 0);
+    if (total === 0) return null; // No children — don't penalize
+    return compliant >= total;
+  } catch(e) {
+    return null;
+  }
 }
 
 async function importRosterCSV(csvText, uploadedBy) {
@@ -356,7 +455,7 @@ module.exports = {
         r.planner_name, r.case_name,
         COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END)::int as times_seen,
         MAX(CASE WHEN cs->>'seen' = 'Yes' THEN e.week_ending END) as last_seen,
-        CASE WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) >= 2 THEN 'Compliant' ELSE 'Non-compliant' END as compliance_status
+        CASE WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) >= 1 THEN 'Compliant' ELSE 'Non-compliant' END as compliance_status
       FROM children c
       JOIN roster r ON c.case_id = r.case_id
       LEFT JOIN entries e ON e.case_id = c.case_id AND e.week_ending LIKE $1
@@ -395,9 +494,14 @@ module.exports = {
   },
 
   async saveEntry(entry, userId, userName, userRole) {
-    const responses = entry.responses || [];
+    const responses    = entry.responses    || [];
     const childrenSeen = entry.children_seen || [];
-    const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses);
+    // Check children compliance for scoring
+    const [seenThisMonth, seenAllMonths] = await Promise.all([
+      checkChildrenMonthlyCompliance(entry.case_id, entry.week_ending),
+      checkChildrenLifetimeCompliance(entry.case_id, entry.week_ending),
+    ]);
+    const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses, seenThisMonth, seenAllMonths);
     const recordId = 'LOG-' + uuidv4().slice(0,8).toUpperCase();
     await query(
       `INSERT INTO entries (record_id,case_id,program_id,week_ending,submitted_by,submitted_name,submitted_role,case_planner,household_id,children_count,submission_notes,responses,children_seen,weekly_score,monthly_score,quarterly_score,lifetime_score,safety_flag,fasp_status)
@@ -408,9 +512,13 @@ module.exports = {
     );
   },
   async updateEntry(id, entry, userId) {
-    const responses = entry.responses || [];
+    const responses    = entry.responses    || [];
     const childrenSeen = entry.children_seen || [];
-    const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses);
+    const [seenThisMonth, seenAllMonths] = await Promise.all([
+      checkChildrenMonthlyCompliance(entry.case_id, entry.week_ending),
+      checkChildrenLifetimeCompliance(entry.case_id, entry.week_ending),
+    ]);
+    const { ws, ms, qs, ls, sf, fasp } = calcAllScores(responses, seenThisMonth, seenAllMonths);
     await query(
       `UPDATE entries SET responses=$1,children_seen=$2,weekly_score=$3,monthly_score=$4,quarterly_score=$5,lifetime_score=$6,safety_flag=$7,fasp_status=$8,case_planner=$9,children_count=$10,submission_notes=$11,last_edited_by=$12,last_edited_at=NOW() WHERE id=$13 AND reviewed=false`,
       [JSON.stringify(responses), JSON.stringify(childrenSeen), ws, ms, qs, ls, sf, fasp,

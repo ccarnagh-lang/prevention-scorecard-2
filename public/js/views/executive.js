@@ -415,7 +415,7 @@ const ExecViews = {
             <td style="font-weight:600">${c.child_name||'—'}</td>
             <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
             <td style="font-size:12px;color:#888">${c.dob||'—'}</td>
-            <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)>=2?'badge-green':parseInt(c.times_seen)===1?'badge-amber':'badge-red'}">${c.times_seen||0}x</span></td>
+            <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)>=1?'badge-green':'badge-red'}">${c.times_seen||0}x</span></td>
             <td style="font-size:12px;color:#888">${c.last_seen||'Never'}</td>
             <td><span class="badge ${c.compliance_status==='Compliant'?'badge-green':'badge-red'}">${c.compliance_status}</span></td>
             <td style="font-size:12px">${c.planner_name||'—'}</td>
@@ -439,7 +439,7 @@ const ExecViews = {
       <td style="font-weight:600">${c.child_name||'—'}</td>
       <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
       <td style="font-size:12px;color:#888">${c.dob||'—'}</td>
-      <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)>=2?'badge-green':parseInt(c.times_seen)===1?'badge-amber':'badge-red'}">${c.times_seen||0}x</span></td>
+      <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)>=1?'badge-green':'badge-red'}">${c.times_seen||0}x</span></td>
       <td style="font-size:12px;color:#888">${c.last_seen||'Never'}</td>
       <td><span class="badge ${c.compliance_status==='Compliant'?'badge-green':'badge-red'}">${c.compliance_status}</span></td>
       <td style="font-size:12px">${c.planner_name||'—'}</td>

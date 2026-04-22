@@ -21,7 +21,7 @@ const SupViews = {
             <td class="mono bold" style="color:#1B3A5C">${e.case_id}</td>
             <td>${e.case_planner||'—'}</td>
             <td>${UI.badge(e.weekly_score)}</td><td>${UI.badge(e.monthly_score)}</td><td>${UI.badge(e.quarterly_score)}</td>
-            <td>${e.safety_flag==='Yes'?'<span class="badge badge-red">Flag</span>':'<span class="badge badge-gray">—</span>'}</td>
+            <td>${e.safety_flag==='Yes'?`<span class="badge badge-red" style="cursor:pointer" onclick="SharedViews.showSafetyFlagDetail('${e.case_id}')" title="Click to see flag details">⚠ Flag</span>`:'<span class="badge badge-gray">—</span>'}</td>
             <td>${UI.faspBadge(e.fasp_status)}</td>
             <td><button class="btn btn-xs" onclick="sessionStorage.setItem('sn_case','${e.case_id}');App.nav('supnote')">Sup note</button></td>
           </tr>`).join(''):'<tr><td colspan="8" class="empty-state">No cases yet.</td></tr>'}</tbody>

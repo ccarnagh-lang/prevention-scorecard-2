@@ -333,6 +333,62 @@ const SharedViews = {
     this.filterCases();
   },
 
+  async showSafetyFlagDetail(caseId) {
+    const entries = await API.get(`/api/entries?case_id=${caseId}&limit=10`) || [];
+    // Find most recent entry with a safety flag
+    const flagged = entries.find(e => e.safety_flag === 'Yes');
+    if (!flagged) { UI.toast('No flag details found', 'error'); return; }
+
+    const resp  = flagged.responses || [];
+    const w9    = resp.find(r => r.id === 'W9')  || {};
+    const w10   = resp.find(r => r.id === 'W10') || {};
+    const w11   = resp.find(r => r.id === 'W11') || {};
+
+    UI.modal(`
+      <div class="modal-title">⚠ Safety flag — ${caseId}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:14px">
+        Week ending: <strong>${flagged.week_ending||'—'}</strong> &nbsp;|&nbsp;
+        Submitted by: <strong>${flagged.submitted_name||flagged.case_planner||'—'}</strong>
+      </div>
+
+      <div style="padding:12px;border-radius:8px;background:#FFF3F3;border-left:4px solid #A32D2D;margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:#A32D2D;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Safety concerns reported</div>
+
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W9 — Safety concerns raised</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:${w9.response==='Yes'?'#FCEBEB':'#EAF3DE'};color:${w9.response==='Yes'?'#791F1F':'#27500A'}">${w9.response||'—'}</span>
+            ${w9.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w9.notes}</span>`:''}
+          </div>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W10 — Safety plan documented when concerns raised</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:${w10.response==='Yes'?'#EAF3DE':w10.response==='No'?'#FCEBEB':'#FAEEDA'};color:${w10.response==='Yes'?'#27500A':w10.response==='No'?'#791F1F':'#633806'}">${w10.response||'—'}</span>
+            ${w10.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w10.notes}</span>`:''}
+          </div>
+          ${w10.response==='No'?'<div style="font-size:11px;color:#A32D2D;margin-top:5px;font-weight:600">⚠ Safety concerns were raised but no safety plan was documented — immediate action required.</div>':''}
+          ${w10.response==='Some but not all'?'<div style="font-size:11px;color:#BA7517;margin-top:5px;font-weight:600">⚠ Safety plan partially documented — follow up needed.</div>':''}
+        </div>
+
+        ${w11.response?`<div style="margin-bottom:6px">
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W11 — Risk level raised</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#FAEEDA;color:#633806">${w11.response}</span>
+            ${w11.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w11.notes}</span>`:''}
+          </div>
+        </div>`:''}
+      </div>
+
+      ${flagged.submission_notes?`<div style="font-size:12px;color:#555;padding:10px;background:#F8F9FB;border-radius:6px;margin-bottom:10px"><strong>Submission notes:</strong> ${flagged.submission_notes}</div>`:''}
+
+      <div class="modal-footer">
+        <button class="btn" data-cancel>Close</button>
+        <button class="btn btn-p" onclick="UI.closeModal();sessionStorage.setItem('sn_case','${caseId}');App.nav('supnote')">Open supervisory review</button>
+      </div>`, () => {});
+  },
+
   openCaseReview(caseId) {
     sessionStorage.setItem('sn_case', caseId);
     App.nav('supnote');
@@ -382,7 +438,7 @@ const SharedViews = {
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.monthly_score)}</td>
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.quarterly_score)}</td>
           <td>${e.has_entry===false?'<span style="color:#ccc;font-size:11px">—</span>':UI.badge(e.lifetime_score)}</td>
-          <td>${e.safety_flag==='Yes'?'<span class="badge badge-red">Flag</span>':'<span class="badge badge-gray">—</span>'}</td>
+          <td>${e.safety_flag==='Yes'?`<span class="badge badge-red" style="cursor:pointer" onclick="SharedViews.showSafetyFlagDetail('${e.case_id}')" title="Click to see flag details">⚠ Flag</span>`:'<span class="badge badge-gray">—</span>'}</td>
           <td>${UI.faspBadge(e.fasp_status)}</td>
           <td>${e.active===false?'<span class="badge badge-gray">Ended</span>':e.has_entry===false?'<span class="badge badge-amber">No entries</span>':'<span class="badge badge-green">Active</span>'}</td>
           <td style="display:flex;gap:4px">
@@ -1034,7 +1090,7 @@ const SharedViews = {
         <thead><tr style="background:#1B3A5C">${['Child Name','CIN','Age','Times seen','Times not seen','Reasons not seen','Compliance'].map(h=>`<th style="color:#fff;padding:5px 8px;text-align:left;font-size:10px">${h}</th>`).join('')}</tr></thead>
         <tbody>${children.map(c=>{
           const cs = childSeenCounts[c.cin] || { seen:0, not_seen:0, reasons:[] };
-          const compliant = cs.seen >= 2;
+          const compliant = cs.seen >= 1;
           return `<tr style="border-bottom:1px solid #F0F2F5">
             <td style="padding:5px 8px;font-weight:600">${c.child_name||'—'}</td>
             <td style="padding:5px 8px;font-family:monospace;font-size:10px">${c.cin||'—'}</td>
