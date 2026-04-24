@@ -107,3 +107,13 @@ const UI = {
     });
   },
 };
+
+// Entry form helpers — global so they survive any shared.js truncation
+function buildRows(reqs) {
+  return reqs.map(r => UI.buildReqRow(r)).join('');
+}
+function buildSection(reqs) {
+  return Object.entries(reqs).map(([key,items]) =>
+    `<div class="req-sec-hdr">${key.charAt(0).toUpperCase()+key.slice(1)}</div>` + buildRows(items)
+  ).join('');
+}
