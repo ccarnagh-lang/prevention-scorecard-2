@@ -46,11 +46,13 @@ function parsePrograms(programId) {
 function scopeProgram(req, res, next) {
   const u = req.session.user;
   if (u.role === 'executive' || u.role === 'admin') {
+    // Admin/exec: optional filter by single program_id from query
     req.programScope  = req.query.program_id || null;
     req.programScopes = null;
   } else {
-    const programs    = parsePrograms(u.program_id);
-    req.programScope  = programs[0] || null;
+    // Non-admin: always scoped to user's assigned programs
+    const programs = parsePrograms(u.program_id);
+    req.programScope  = programs.length === 1 ? programs[0] : null;
     req.programScopes = programs.length > 0 ? programs : null;
   }
   next();
