@@ -494,13 +494,23 @@ module.exports = {
   importRosterCSV,
 
   async getChildrenSeenCompliance(programId, programIds, month, year) {
-    const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+    const monthStr    = `${year}-${String(month).padStart(2,'0')}`;
+    const today       = new Date();
+    const isWeek3Plus = today.getFullYear() === year && (today.getMonth()+1) === month && today.getDate() >= 15;
+    const isCurrentMonth = today.getFullYear() === year && (today.getMonth()+1) === month;
+
     let sql = `
       SELECT c.cin, c.child_name, c.dob, c.case_id, c.program_id,
         r.planner_name, r.case_name,
         COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END)::int as times_seen,
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' AND cs->>'note_documented' = 'Yes' THEN 1 END)::int as times_seen_with_note,
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' AND (cs->>'note_documented' IS NULL OR cs->>'note_documented' != 'Yes') THEN 1 END)::int as times_seen_no_note,
         MAX(CASE WHEN cs->>'seen' = 'Yes' THEN e.week_ending END) as last_seen,
-        CASE WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) >= 1 THEN 'Compliant' ELSE 'Non-compliant' END as compliance_status
+        CASE
+          WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' AND cs->>'note_documented' = 'Yes' THEN 1 END) >= 1 THEN 'Compliant'
+          WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) >= 1 THEN 'Doc missing'
+          ELSE 'Not seen'
+        END as compliance_status
       FROM children c
       JOIN roster r ON c.case_id = r.case_id
       LEFT JOIN entries e ON e.case_id = c.case_id AND e.week_ending LIKE $1
@@ -512,9 +522,15 @@ module.exports = {
     } else if (programId) {
       sql += ` AND c.program_id = $${params.push(programId)}`;
     }
-    sql += ' GROUP BY c.cin, c.child_name, c.dob, c.case_id, c.program_id, r.planner_name, r.case_name ORDER BY compliance_status, c.program_id, c.case_id, c.child_name';
-    return query(sql, params);
+    sql += ` GROUP BY c.cin, c.child_name, c.dob, c.case_id, c.program_id, r.planner_name, r.case_name
+             ORDER BY compliance_status, c.program_id, c.case_id, c.child_name`;
+    const rows = await query(sql, params);
+    return rows.map(r => ({
+      ...r,
+      at_risk: isCurrentMonth && isWeek3Plus && r.compliance_status !== 'Compliant',
+    }));
   },
+
 
   async getChildrenNotSeenThisWeek(programId, programIds, weekEnding) {
     // Delegates to monthly — "not seen this month" is the compliance standard
@@ -523,13 +539,23 @@ module.exports = {
   },
 
   async getChildrenNotSeenThisMonth(programId, programIds, month, year) {
-    const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+    const monthStr  = `${year}-${String(month).padStart(2,'0')}`;
+    const today     = new Date();
+    const isWeek3Plus = today.getFullYear() === year && (today.getMonth()+1) === month && today.getDate() >= 15;
+
     let sql = `
       SELECT c.cin, c.child_name, c.dob, c.case_id, c.program_id,
         r.planner_name, r.case_name,
         COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END)::int as times_seen,
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' AND cs->>'note_documented' = 'Yes' THEN 1 END)::int as times_documented,
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' AND (cs->>'note_documented' IS NULL OR cs->>'note_documented' != 'Yes') THEN 1 END)::int as times_seen_no_note,
         MAX(CASE WHEN cs->>'seen' = 'Yes' THEN e.week_ending END) as last_seen,
-        COALESCE(string_agg(DISTINCT CASE WHEN cs->>'seen' != 'Yes' AND cs->>'reason_not_seen' IS NOT NULL THEN cs->>'reason_not_seen' END, '; '),'') as reason_not_seen
+        COALESCE(string_agg(DISTINCT CASE WHEN cs->>'seen' != 'Yes' AND cs->>'reason_not_seen' IS NOT NULL THEN cs->>'reason_not_seen' END, '; '),'') as reason_not_seen,
+        CASE
+          WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' AND cs->>'note_documented' = 'Yes' THEN 1 END) >= 1 THEN 'Compliant'
+          WHEN COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) >= 1 THEN 'Doc missing'
+          ELSE 'Not seen'
+        END as compliance_status
       FROM children c
       JOIN roster r ON c.case_id = r.case_id
       LEFT JOIN entries e ON e.case_id = c.case_id AND e.week_ending LIKE $1
@@ -543,9 +569,12 @@ module.exports = {
     }
     sql += `
       GROUP BY c.cin, c.child_name, c.dob, c.case_id, c.program_id, r.planner_name, r.case_name
-      HAVING COUNT(CASE WHEN cs->>'seen' = 'Yes' THEN 1 END) = 0
-      ORDER BY c.program_id, c.case_id, c.child_name`;
-    return query(sql, params);
+      HAVING
+        COUNT(CASE WHEN cs->>'seen' = 'Yes' AND cs->>'note_documented' = 'Yes' THEN 1 END) = 0
+      ORDER BY compliance_status, c.program_id, c.case_id, c.child_name`;
+
+    const rows = await query(sql, params);
+    return rows.map(r => ({ ...r, at_risk: isWeek3Plus && r.compliance_status !== 'Compliant' }));
   },
 
   async saveEntry(entry, userId, userName, userRole) {
@@ -759,7 +788,9 @@ module.exports = {
     const notSeenThisWeek    = await this.getChildrenNotSeenThisWeek(programId, programIds, we);
     const now                = new Date();
     const monthlyCompliance  = await this.getChildrenSeenCompliance(programId, programIds, now.getMonth()+1, now.getFullYear());
-    const nonCompliantMonthly= monthlyCompliance.filter(c => c.compliance_status === 'Non-compliant').length;
+    const notSeenActually    = monthlyCompliance.filter(c => c.compliance_status === 'Not seen').length;
+    const docMissing         = monthlyCompliance.filter(c => c.compliance_status === 'Doc missing').length;
+    const nonCompliantMonthly= notSeenActually + docMissing;
 
     // Date range metadata to send back to frontend
     const dateRange = await queryOne(
@@ -814,6 +845,7 @@ module.exports = {
     return {
       totalCases, safetyFlags, faspOver, totalChildren,
       notSeenCount: notSeenThisWeek.length, nonCompliantMonthly,
+      notSeenActually, docMissing,
       casesNotReviewedWeek, casesNotReviewedMonth,
       scores: scoresRow || {}, byPlanner, caseScores, trend, programs,
       notSeenThisWeek: notSeenThisWeek.slice(0, 20),

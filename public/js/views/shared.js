@@ -24,7 +24,10 @@ const SharedViews = {
     friday.setDate(today.getDate() + daysToFriday);
     const defaultWeek = friday.toISOString().slice(0,10);
 
-    const buildRows = reqs => reqs.map(r => UI.buildReqRow(r)).join('');
+    const buildRows    = reqs => reqs.map(r => UI.buildReqRow(r)).join('');
+    const buildSection = reqs => Object.entries(reqs).map(([key,items]) =>
+      `<div class="req-sec-hdr">${key.charAt(0).toUpperCase()+key.slice(1)}</div>` + buildRows(items)
+    ).join('');
 
     UI.setContent(`
       <div class="score-strip">
@@ -127,18 +130,31 @@ const SharedViews = {
         return isNaN(a) ? '—' : a + ' yrs';
       };
 
-      childrenEl.innerHTML = children.map(c => `
-        <div class="req-row" style="grid-template-columns:1fr 80px 130px 1fr" data-cin="${c.cin}">
+      // Header row
+      childrenEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 100px 160px 160px 1fr;gap:8px;padding:4px 8px;font-size:10px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #eee;margin-bottom:4px">
+          <div>Child</div><div>Age</div><div>Seen? <span style="color:#A32D2D">*</span></div><div>Note documented? <span style="color:#A32D2D">*</span></div><div>If not seen — reason</div>
+        </div>
+        ${children.map(c => `
+        <div class="req-row" style="grid-template-columns:1fr 100px 160px 160px 1fr;align-items:center" data-cin="${c.cin}">
           <div>
             <div style="font-size:13px;font-weight:600;color:#222">${c.child_name||'Unknown'}</div>
-            <div style="font-size:11px;color:#aaa">CIN: ${c.cin||'—'} &nbsp;|&nbsp; DOB: ${c.dob||'—'} &nbsp;|&nbsp; Age: ${age(c.dob)}</div>
+            <div style="font-size:11px;color:#aaa">CIN: ${c.cin||'—'} &nbsp;|&nbsp; DOB: ${c.dob||'—'}</div>
           </div>
-          <div style="text-align:center;font-size:11px;color:#888;font-weight:600">${age(c.dob)}</div>
-          <select class="req-sel" id="cs-seen-${c.cin}" onchange="SharedViews.styleReq(this);SharedViews.toggleReasonField('${c.cin}')">
-            <option value="">Not recorded</option>
+          <div style="text-align:center;font-size:12px;font-weight:600;color:#555">${age(c.dob)}</div>
+          <select class="req-sel" id="cs-seen-${c.cin}" onchange="SharedViews.styleReq(this);SharedViews.toggleChildFields('${c.cin}')">
+            <option value="">— Required —</option>
             <option value="Yes">Yes — seen</option>
             <option value="No">No — not seen</option>
           </select>
+          <div id="cs-note-wrap-${c.cin}" style="display:none">
+            <select class="req-sel" id="cs-note-${c.cin}" onchange="SharedViews.styleReq(this)">
+              <option value="">— Required —</option>
+              <option value="Yes">Yes — note written</option>
+              <option value="No">No — note missing</option>
+            </select>
+          </div>
+          <div id="cs-note-placeholder-${c.cin}" style="color:#ddd;font-size:11px;font-style:italic">Only for seen children</div>
           <div id="cs-reason-wrap-${c.cin}" style="display:none">
             <select class="req-sel" id="cs-reason-${c.cin}" style="width:100%">
               <option value="">Select reason...</option>
@@ -151,18 +167,25 @@ const SharedViews = {
               <option>Other — see notes</option>
             </select>
           </div>
-        </div>`).join('');
+        </div>`).join('')}`;
     } catch(e) {
       childrenEl.innerHTML = `<div style="font-size:12px;color:#aaa;padding:8px 0">Could not load children: ${e.message}</div>`;
     }
     SharedViews.calcScore();
   },
 
-  toggleReasonField(cin) {
-    const sel   = document.getElementById('cs-seen-'+cin);
-    const wrap  = document.getElementById('cs-reason-wrap-'+cin);
-    if (wrap) wrap.style.display = sel?.value === 'No' ? 'block' : 'none';
+  toggleChildFields(cin) {
+    const sel         = document.getElementById('cs-seen-'+cin);
+    const reasonWrap  = document.getElementById('cs-reason-wrap-'+cin);
+    const noteWrap    = document.getElementById('cs-note-wrap-'+cin);
+    const notePlaceholder = document.getElementById('cs-note-placeholder-'+cin);
+    const seen = sel?.value;
+    if (reasonWrap)     reasonWrap.style.display     = seen === 'No'  ? 'block' : 'none';
+    if (noteWrap)       noteWrap.style.display        = seen === 'Yes' ? 'block' : 'none';
+    if (notePlaceholder) notePlaceholder.style.display = seen === 'Yes' ? 'none'  : 'block';
   },
+
+  toggleReasonField(cin) { this.toggleChildFields(cin); },
 
   styleReq(sel) {
     sel.className = 'req-sel';
@@ -208,14 +231,40 @@ const SharedViews = {
       unscored: r.unscored||false,
     }));
 
-    // Collect children seen data
+    // Collect and validate children seen data
     const childRows = document.querySelectorAll('[data-cin]');
-    const children_seen = Array.from(childRows).map(row => {
-      const cin    = row.dataset.cin;
-      const seen   = document.getElementById('cs-seen-'+cin)?.value || '';
-      const reason = document.getElementById('cs-reason-'+cin)?.value || '';
-      return { cin, seen, reason_not_seen: reason };
-    }).filter(c => c.cin && c.seen);
+    if (childRows.length === 0) {
+      UI.toast('No children loaded — please select a case first','error');
+      return null;
+    }
+
+    const children_seen = [];
+    const missing = [];
+    Array.from(childRows).forEach(row => {
+      const cin      = row.dataset.cin;
+      const nameEl   = row.querySelector('div > div:first-child');
+      const childName = nameEl?.textContent?.trim() || cin;
+      const seen     = document.getElementById('cs-seen-'+cin)?.value || '';
+      const reason   = document.getElementById('cs-reason-'+cin)?.value || '';
+      const noteDoc  = document.getElementById('cs-note-'+cin)?.value  || '';
+
+      // Validate required fields
+      if (!seen) {
+        missing.push(`${childName}: "Seen?" is required`);
+        return;
+      }
+      if (seen === 'Yes' && !noteDoc) {
+        missing.push(`${childName}: "Note documented?" is required when child is seen`);
+        return;
+      }
+
+      children_seen.push({ cin, seen, note_documented: noteDoc, reason_not_seen: reason });
+    });
+
+    if (missing.length > 0) {
+      UI.toast('Required fields missing:\n• ' + missing.join('\n• '), 'error');
+      return null;
+    }
 
     return {
       case_id:          caseId,
@@ -1263,8 +1312,31 @@ const SharedViews = {
   },
 
     async exportNote() {
-    const caseId=document.getElementById('sn-case')?.value;
-    if (!caseId){UI.toast('Please select a case first','error');return;}
+    const caseId = document.getElementById('sn-case')?.value;
+    if (!caseId) { UI.toast('Please select a case first','error'); return; }
+
+    // Validate required fields before export
+    const missingFields = [];
+    const narr = document.getElementById('sn-narr')?.value?.trim();
+    const disc = document.getElementById('sn-disc')?.value?.trim();
+    const sig  = document.getElementById('sn-sig')?.value?.trim();
+    if (!narr) missingFields.push('Supervisor narrative');
+    if (!disc) missingFields.push('Discharge notes');
+    if (!sig)  missingFields.push('E-signature (type your full name)');
+
+    if (missingFields.length > 0) {
+      UI.modal(`
+        <div class="modal-title" style="color:#A32D2D">⚠ Cannot export — required fields missing</div>
+        <div style="font-size:12px;color:#555;margin-bottom:14px">Please complete the following in the left panel before exporting:</div>
+        <ul style="font-size:13px;color:#333;line-height:2;padding-left:20px">
+          ${missingFields.map(m=>`<li style="color:#A32D2D;font-weight:600">${m}</li>`).join('')}
+        </ul>
+        <div class="modal-footer">
+          <button class="btn btn-p" data-cancel>Go back and complete</button>
+        </div>`, () => {});
+      return;
+    }
+
     try {
       UI.toast('Generating Word document...','',2000);
       await API.download('/api/export/supervisory-note',{

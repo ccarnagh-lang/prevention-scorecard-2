@@ -75,12 +75,13 @@ const ExecViews = {
         Showing: <strong style="color:#1B3A5C">${dateLabel}</strong>
         ${dr.earliest?` &nbsp;|&nbsp; Earliest data: <strong>${dr.earliest}</strong>`:''}
       </div>
-      <div class="metric-grid" style="grid-template-columns:repeat(7,minmax(0,1fr))">
+      <div class="metric-grid" style="grid-template-columns:repeat(8,minmax(0,1fr))">
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Avg weekly score</div><div class="mc-value" style="color:${UI.scoreColor(avgWs)}">${avgWs!=null?avgWs+'%':'—'}</div><div class="mc-sub">${progs.length||'All'} programs</div></div>
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Active cases</div><div class="mc-value">${totalCases}</div><div class="mc-sub">All programs</div></div>
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Not reviewed<br>this week</div><div class="mc-value" style="color:${(d.casesNotReviewedWeek||0)>0?'#A32D2D':'#0F6E56'}">${d.casesNotReviewedWeek||0}</div><div class="mc-sub">No entry this week</div></div>
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Not reviewed<br>this month</div><div class="mc-value" style="color:${(d.casesNotReviewedMonth||0)>0?'#BA7517':'#0F6E56'}">${d.casesNotReviewedMonth||0}</div><div class="mc-sub">No entry this month</div></div>
-        <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Children not seen<br>this month</div><div class="mc-value" style="color:${(d.notSeenCount||0)>0?'#A32D2D':'#0F6E56'}">${d.notSeenCount||0}</div></div>
+        <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Not seen<br>this month</div><div class="mc-value" style="color:${(d.notSeenActually||0)>0?'#A32D2D':'#0F6E56'}">${d.notSeenActually||0}</div><div class="mc-sub" style="font-size:10px">No visit</div></div>
+        <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Doc missing<br>this month</div><div class="mc-value" style="color:${(d.docMissing||0)>0?'#BA7517':'#0F6E56'}">${d.docMissing||0}</div><div class="mc-sub" style="font-size:10px">Seen, no note</div></div>
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">Safety flags</div><div class="mc-value" style="color:#A32D2D">${totalFlags}</div><div class="mc-sub">${dateLabel}</div></div>
         <div class="mc"><div class="mc-label" style="font-size:12px;font-weight:700">FASP overdue</div><div class="mc-value" style="color:#BA7517">${totalFasp}</div><div class="mc-sub">${dateLabel}</div></div>
       </div>
@@ -347,8 +348,9 @@ const ExecViews = {
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div class="tab-bar" style="margin-bottom:0">
-          <div class="tab active" onclick="ExecViews.switchChildrenTab('weekly',this,'${programId||''}')">Not seen this week (${notSeenCount})</div>
-          <div class="tab" onclick="ExecViews.switchChildrenTab('monthly',this,'${programId||''}')">Non-compliant this month (${nonCompliant})</div>
+          <div class="tab active" onclick="ExecViews.switchChildrenTab('not_seen',this,'${programId||''}')">Not seen (${(compliance||[]).filter(c=>c.compliance_status==='Not seen').length})</div>
+          <div class="tab" onclick="ExecViews.switchChildrenTab('doc_missing',this,'${programId||''}')">Doc missing (${(compliance||[]).filter(c=>c.compliance_status==='Doc missing').length})</div>
+          <div class="tab" onclick="ExecViews.switchChildrenTab('at_risk',this,'${programId||''}')">⚠ At risk week 3 (${(compliance||[]).filter(c=>c.at_risk).length})</div>
           <div class="tab" onclick="ExecViews.switchChildrenTab('all',this,'${programId||''}')">All children</div>
         </div>
         <button class="btn btn-sm" onclick="window.open('/api/export/children-compliance${pp}','_blank')">Export CSV</button>
@@ -370,36 +372,41 @@ const ExecViews = {
       ? `<div class="table-wrap"><table class="data-table"><thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`
       : '<div class="empty-state">No data for this period.</div>';
 
-    if (id === 'weekly') {
-      content.innerHTML = tbl(
-        (ExecViews._notSeenData||[]).map(c=>`<tr>
-          <td style="font-size:12px">${c.program_id||'—'}</td>
-          <td class="mono" style="color:#1B3A5C;font-weight:600">${c.case_id}</td>
-          <td style="font-size:12px">${c.case_name||'—'}</td>
-          <td style="font-weight:600">${c.child_name||'—'}</td>
-          <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
-          <td><span class="badge badge-red">${c.seen_status||'Not seen'}</span></td>
-          <td style="font-size:12px;color:#888">${c.reason_not_seen||'—'}</td>
-          <td style="font-size:12px">${c.planner_name||'—'}</td>
-        </tr>`),
-        ['Program','Case ID','Case Name','Child Name','CIN','Status','Reason','Planner']
-      );
-    } else if (id === 'monthly') {
-      const data = (ExecViews._childrenData||[]).filter(c=>c.compliance_status==='Non-compliant');
-      content.innerHTML = tbl(
-        data.map(c=>`<tr>
-          <td style="font-size:12px">${c.program_id||'—'}</td>
-          <td class="mono" style="color:#1B3A5C;font-weight:600">${c.case_id}</td>
-          <td style="font-size:12px">${c.case_name||'—'}</td>
-          <td style="font-weight:600">${c.child_name||'—'}</td>
-          <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
-          <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)===0?'badge-red':'badge-amber'}">${c.times_seen||0}x</span></td>
-          <td style="font-size:12px;color:#888">${c.last_seen||'Never'}</td>
-          <td><span class="badge badge-red">Non-compliant</span></td>
-          <td style="font-size:12px">${c.planner_name||'—'}</td>
-        </tr>`),
-        ['Program','Case ID','Case Name','Child','CIN','Times seen','Last seen','Status','Planner']
-      );
+    const childRow = (c) => `<tr>
+      <td style="font-size:12px">${c.program_id||'—'}</td>
+      <td class="mono" style="color:#1B3A5C;font-weight:600">${c.case_id}</td>
+      <td style="font-size:12px">${c.case_name||'—'}</td>
+      <td style="font-weight:600">${c.at_risk?'⚠ ':''}<span style="color:${c.at_risk?'#E07A00':'inherit'}">${c.child_name||'—'}</span></td>
+      <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
+      <td style="font-size:12px;color:#888">${c.dob||'—'}</td>
+      <td style="text-align:center">
+        <span class="badge ${c.compliance_status==='Compliant'?'badge-green':c.compliance_status==='Doc missing'?'badge-amber':'badge-red'}">
+          ${c.compliance_status==='Compliant'?'✓ Compliant':c.compliance_status==='Doc missing'?'⚠ Doc missing':'✗ Not seen'}
+        </span>
+        ${c.at_risk?'<span class="badge badge-amber" style="font-size:9px;margin-left:4px">Week 3</span>':''}
+      </td>
+      <td style="font-size:12px;color:#888">${c.last_seen||'Never'}</td>
+      <td style="font-size:12px">${c.planner_name||'—'}</td>
+    </tr>`;
+    const childCols = ['Program','Case ID','Case Name','Child','CIN','DOB','Status','Last seen','Planner'];
+
+    if (id === 'not_seen') {
+      const data = (ExecViews._childrenData||[]).filter(c=>c.compliance_status==='Not seen');
+      content.innerHTML = data.length
+        ? tbl(data.map(childRow), childCols)
+        : '<div class="empty-state" style="color:#0F6E56">✓ All children have been visited this month.</div>';
+    } else if (id === 'doc_missing') {
+      const data = (ExecViews._childrenData||[]).filter(c=>c.compliance_status==='Doc missing');
+      content.innerHTML = data.length
+        ? tbl(data.map(childRow), childCols)
+        : '<div class="empty-state" style="color:#0F6E56">✓ All visited children have notes documented.</div>';
+    } else if (id === 'at_risk') {
+      const data = (ExecViews._childrenData||[]).filter(c=>c.at_risk);
+      content.innerHTML = data.length
+        ? `<div style="font-size:12px;color:#E07A00;padding:8px 12px;background:#FFF8F0;border-radius:6px;border-left:3px solid #E07A00;margin-bottom:10px;font-weight:600">
+            ⚠ It is week 3 or later in the month. These children are out of compliance and have not yet been seen and documented.
+           </div>` + tbl(data.map(childRow), childCols)
+        : '<div class="empty-state" style="color:#0F6E56">✓ No children at risk — all seen or month not yet at week 3.</div>';
     } else {
       const data = ExecViews._childrenData || [];
       content.innerHTML = `
@@ -438,12 +445,16 @@ const ExecViews = {
     tbody.innerHTML = data.map(c=>`<tr>
       <td style="font-size:12px">${c.program_id||'—'}</td>
       <td class="mono" style="color:#1B3A5C;font-weight:600">${c.case_id}</td>
-      <td style="font-weight:600">${c.child_name||'—'}</td>
+      <td style="font-weight:600">${c.at_risk?'⚠ ':''}<span style="color:${c.at_risk?'#E07A00':'inherit'}">${c.child_name||'—'}</span></td>
       <td class="mono" style="font-size:12px">${c.cin||'—'}</td>
       <td style="font-size:12px;color:#888">${c.dob||'—'}</td>
-      <td style="text-align:center"><span class="badge ${parseInt(c.times_seen)>=1?'badge-green':'badge-red'}">${c.times_seen||0}x</span></td>
       <td style="font-size:12px;color:#888">${c.last_seen||'Never'}</td>
-      <td><span class="badge ${c.compliance_status==='Compliant'?'badge-green':'badge-red'}">${c.compliance_status}</span></td>
+      <td>
+        <span class="badge ${c.compliance_status==='Compliant'?'badge-green':c.compliance_status==='Doc missing'?'badge-amber':'badge-red'}">
+          ${c.compliance_status==='Compliant'?'✓ Compliant':c.compliance_status==='Doc missing'?'⚠ Doc missing':'✗ Not seen'}
+        </span>
+        ${c.at_risk?'<span class="badge badge-amber" style="font-size:9px;margin-left:4px">Week 3</span>':''}
+      </td>
       <td style="font-size:12px">${c.planner_name||'—'}</td>
     </tr>`).join('');
   },

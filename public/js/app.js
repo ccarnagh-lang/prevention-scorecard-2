@@ -35,12 +35,13 @@ const SupViews = {
       </div>`;
 
     UI.setContent(`
-      <div style="background:#1B3A5C;border-radius:10px;padding:12px 18px;margin-bottom:18px;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">
+      <div style="background:#1B3A5C;border-radius:10px;padding:12px 18px;margin-bottom:18px;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px">
         ${kpi('Program score', s.weekly!=null?Math.round(s.weekly)+'%':'—')}
         ${kpi('Active cases', d.totalCases||0)}
         ${kpi('Not reviewed<br>this week', casesNotWeek, false, casesNotWeek>0)}
         ${kpi('Not reviewed<br>this month', casesNotMonth, false, casesNotMonth>0)}
-        ${kpi('Children not<br>seen this month', notSeenCount, false, notSeenCount>0)}
+        ${kpi('Not seen<br>this month', d.notSeenActually||0, false, (d.notSeenActually||0)>0)}
+        ${kpi('Doc missing<br>this month', d.docMissing||0, true, false)}
         ${kpi('Safety flags', d.safetyFlags||0, false, (d.safetyFlags||0)>0)}
         ${kpi('FASP overdue', d.faspOver||0, true)}
       </div>
