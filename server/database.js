@@ -160,6 +160,31 @@ async function checkChildrenMonthlyCompliance(caseId, weekEnding) {
   }
 }
 
+// Get all case planner names visible to a director via reporting chain
+// director -> their supervisors -> staff under those supervisors -> planner names on cases
+async function getPlannerNamesForDirector(directorId) {
+  // Get supervisors who report to this director
+  const supervisors = await query(
+    `SELECT id, name FROM users WHERE director_id=$1 AND active=true AND role='supervisor'`,
+    [directorId]
+  );
+  if (!supervisors.length) return { plannerNames: [], supervisorNames: [] };
+
+  const supervisorNames = supervisors.map(s => s.name);
+  const supervisorIds   = supervisors.map(s => s.id);
+
+  // Get staff who report to any of those supervisors
+  const staff = await query(
+    `SELECT name FROM users WHERE supervisor_id = ANY($1) AND active=true`,
+    [supervisorIds]
+  );
+  const staffNames = staff.map(s => s.name);
+
+  // Director can see cases where planner is a supervisor or staff under them
+  const plannerNames = [...supervisorNames, ...staffNames];
+  return { plannerNames, supervisorNames, staffNames };
+}
+
 async function importRosterCSV(csvText, uploadedBy) {
   const today = new Date().toISOString().slice(0, 10);
   const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
@@ -384,10 +409,11 @@ module.exports = {
       return { ...p, cases, ...scores, flags, fasp, children };
     }));
   },
-  async getWeeklyTrend(programId, programIds, dateFrom, dateTo) {
+  async getWeeklyTrend(programId, programIds, dateFrom, dateTo, plannerNames = null) {
     let sql = 'SELECT week_ending, ROUND(AVG(weekly_score))::int as score FROM entries WHERE weekly_score IS NOT NULL';
     const params = [];
-    if (programIds && programIds.length > 0) { sql += ` AND program_id = ANY($${params.push(programIds)})`; }
+    if (plannerNames && plannerNames.length > 0) { sql += ` AND case_planner = ANY($${params.push(plannerNames)})`; }
+    else if (programIds && programIds.length > 0) { sql += ` AND program_id = ANY($${params.push(programIds)})`; }
     else if (programId) { sql += ` AND program_id = $${params.push(programId)}`; }
     if (dateFrom) { sql += ` AND week_ending >= $${params.push(dateFrom)}`; }
     if (dateTo)   { sql += ` AND week_ending <= $${params.push(dateTo)}`; }
@@ -396,10 +422,13 @@ module.exports = {
     return rows.reverse();
   },
 
-  async getRoster(programId, programIds, activeOnly = true) {
+  async getRoster(programId, programIds, activeOnly = true, plannerNames = null) {
     let sql = 'SELECT * FROM roster WHERE 1=1';
     const params = [];
-    if (programIds && programIds.length > 0) {
+    if (plannerNames && plannerNames.length > 0) {
+      // Director scope: show cases where planner is in their reporting chain
+      sql += ` AND planner_name = ANY($${params.push(plannerNames)})`;
+    } else if (programIds && programIds.length > 0) {
       sql += ` AND program_id = ANY($${params.push(programIds)})`;
     } else if (programId) {
       sql += ` AND program_id = $${params.push(programId)}`;
@@ -558,10 +587,12 @@ module.exports = {
       children_seen: Array.isArray(e.children_seen) ? e.children_seen : JSON.parse(e.children_seen || '[]'),
     }));
   },
-  async getLatestPerCase(programId, programIds, dateFrom, dateTo) {
+  async getLatestPerCase(programId, programIds, dateFrom, dateTo, plannerNames = null) {
     const params = [];
     let innerWhere = ' WHERE 1=1';
-    if (programIds && programIds.length > 0) {
+    if (plannerNames && plannerNames.length > 0) {
+      innerWhere += ` AND case_planner = ANY($${params.push(plannerNames)})`;
+    } else if (programIds && programIds.length > 0) {
       innerWhere += ` AND program_id = ANY($${params.push(programIds)})`;
     } else if (programId) {
       innerWhere += ` AND program_id = $${params.push(programId)}`;
@@ -570,7 +601,9 @@ module.exports = {
     if (dateTo)   { innerWhere += ` AND week_ending <= $${params.push(dateTo)}`; }
     const outerParams = [...params];
     let outerWhere = '';
-    if (programIds && programIds.length > 0) {
+    if (plannerNames && plannerNames.length > 0) {
+      outerWhere = ` AND e.case_planner = ANY($${outerParams.push(plannerNames)})`;
+    } else if (programIds && programIds.length > 0) {
       outerWhere = ` AND e.program_id = ANY($${outerParams.push(programIds)})`;
     } else if (programId) {
       outerWhere = ` AND e.program_id = $${outerParams.push(programId)}`;
@@ -584,9 +617,10 @@ module.exports = {
     }));
   },
 
-  async getDashboard(programId, programIds, weekEnding, dateFrom, dateTo) {
+  async getDashboard(programId, programIds, weekEnding, dateFrom, dateTo, plannerNames = null) {
     const we   = weekEnding || new Date().toISOString().slice(0,10);
     const pids = programIds && programIds.length > 0 ? programIds : (programId ? [programId] : null);
+    const usePlanners = plannerNames && plannerNames.length > 0;
 
     // Build date range filter for entries
     const dateFilter = (paramOffset) => {
@@ -676,7 +710,10 @@ module.exports = {
   async getSupervisionLog(filters = {}) {
     let sql = 'SELECT * FROM supervision_log WHERE 1=1';
     const params = [];
-    if (filters.programIds && filters.programIds.length > 0) {
+    if (filters.plannerNames && filters.plannerNames.length > 0) {
+      // Director scope: show logs for their supervisors and staff
+      sql += ` AND staff_name = ANY($${params.push(filters.plannerNames)})`;
+    } else if (filters.programIds && filters.programIds.length > 0) {
       sql += ` AND program_id = ANY($${params.push(filters.programIds)})`;
     } else if (filters.programId) {
       sql += ` AND program_id=$${params.push(filters.programId)}`;
@@ -758,6 +795,10 @@ module.exports = {
       }
       return { ...u, ...scores, cases, supervisorName, directorName };
     }));
+  },
+
+  async getPlannerNamesForDirector(directorId) {
+    return getPlannerNamesForDirector(directorId);
   },
 
   async logAction(userId, userName, action, entityType, entityId, detail) {

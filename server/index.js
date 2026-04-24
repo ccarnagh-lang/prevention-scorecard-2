@@ -43,6 +43,18 @@ function parsePrograms(programId) {
   return programId.split(',').map(p => p.trim()).filter(Boolean);
 }
 
+// Resolve reporting chain for director — returns planner names they can see
+async function resolvePlannerNames(user) {
+  if (user.role !== 'program_director') return null;
+  try {
+    const result = await db.getPlannerNamesForDirector(user.id);
+    return result.plannerNames.length > 0 ? result.plannerNames : null;
+  } catch(e) {
+    console.warn('[resolvePlannerNames]', e.message);
+    return null;
+  }
+}
+
 function scopeProgram(req, res, next) {
   const u = req.session.user;
   if (u.role === 'executive' || u.role === 'admin') {
@@ -91,11 +103,13 @@ app.get('/api/programs', requireAuth, async (req, res) => {
 
 app.get('/api/dashboard', requireAuth, scopeProgram, async (req, res) => {
   try {
+    const plannerNames = await resolvePlannerNames(req.session.user);
     res.json(await db.getDashboard(
       req.programScope, req.programScopes,
       req.query.week_ending,
       req.query.date_from || null,
-      req.query.date_to   || null
+      req.query.date_to   || null,
+      plannerNames
     ));
   }
   catch(e) { console.error(e); res.status(500).json({ error: e.message }); }
@@ -105,9 +119,10 @@ app.get('/api/roster', requireAuth, scopeProgram, async (req, res) => {
   try {
     const u = req.session.user;
     const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const plannerNames  = await resolvePlannerNames(u);
     const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
     const progIds = isAdminOrExec ? null : req.programScopes;
-    res.json(await db.getRoster(progId, progIds, req.query.active !== 'false'));
+    res.json(await db.getRoster(progId, progIds, req.query.active !== 'false', plannerNames));
   }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -176,12 +191,17 @@ app.post('/api/import/roster', requireAuth, requireAdmin, upload.single('file'),
 
 app.get('/api/entries', requireAuth, scopeProgram, async (req, res) => {
   try {
+    const plannerNames = await resolvePlannerNames(req.session.user);
     res.json(await db.getEntries({
-      programId: req.programScope, programIds: req.programScopes,
-      caseId: req.query.case_id, weekEnding: req.query.week_ending,
-      planner: req.query.planner, dateFrom: req.query.date_from,
-      dateTo: req.query.date_to,
-      limit: req.query.limit ? parseInt(req.query.limit) : 1000,
+      programId:    req.programScope,
+      programIds:   req.programScopes,
+      plannerNames: plannerNames,
+      caseId:       req.query.case_id,
+      weekEnding:   req.query.week_ending,
+      planner:      req.query.planner,
+      dateFrom:     req.query.date_from,
+      dateTo:       req.query.date_to,
+      limit:        req.query.limit ? parseInt(req.query.limit) : 1000,
     }));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -212,12 +232,14 @@ app.get('/api/entries/latest', requireAuth, scopeProgram, async (req, res) => {
   try {
     const u = req.session.user;
     const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const plannerNames  = await resolvePlannerNames(u);
     const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
     const progIds = isAdminOrExec ? null : req.programScopes;
     res.json(await db.getLatestPerCase(
       progId, progIds,
       req.query.date_from || null,
-      req.query.date_to   || null
+      req.query.date_to   || null,
+      plannerNames
     ));
   }
   catch(e) { res.status(500).json({ error: e.message }); }
@@ -233,9 +255,13 @@ app.get('/api/staff', requireAuth, scopeProgram, async (req, res) => {
 
 app.get('/api/supervision-log', requireAuth, scopeProgram, async (req, res) => {
   try {
+    const plannerNames = await resolvePlannerNames(req.session.user);
     res.json(await db.getSupervisionLog({
-      programId: req.programScope, programIds: req.programScopes,
-      staffName: req.query.staff_name, caseId: req.query.case_id,
+      programId:    req.programScope,
+      programIds:   req.programScopes,
+      plannerNames: plannerNames,
+      staffName:    req.query.staff_name,
+      caseId:       req.query.case_id,
     }));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -284,12 +310,14 @@ app.get('/api/submission-stats', requireAuth, scopeProgram, async (req, res) => 
   try {
     const u = req.session.user;
     const isAdminOrExec = u.role === 'admin' || u.role === 'executive';
+    const plannerNames  = await resolvePlannerNames(u);
     const progId  = isAdminOrExec ? (req.query.program_id || null) : req.programScope;
     const progIds = isAdminOrExec ? null : req.programScopes;
     res.json(await db.getSubmissionStats(
       progId, progIds,
       req.query.date_from || null,
-      req.query.date_to   || null
+      req.query.date_to   || null,
+      plannerNames
     ));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -339,6 +367,28 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => { try { await db.deactivateUser(req.params.id); res.json({success:true}); } catch(e) { res.status(400).json({error:e.message}); } });
 app.get('/api/admin/programs',  requireAdmin, async (req, res) => { try { res.json(await db.getAllPrograms()); } catch(e) { res.status(500).json({error:e.message}); } });
 app.post('/api/admin/programs', requireAdmin, async (req, res) => { try { await db.createProgram(req.body); res.json({success:true}); } catch(e) { res.status(400).json({error:e.message}); } });
+
+// Debug route — shows session scope and sample data
+app.get('/api/debug-scope', requireAuth, scopeProgram, async (req, res) => {
+  try {
+    const u = req.session.user;
+    // Get a sample of roster program_ids to compare
+    const rosterSample = await db.getRoster(null, null, false);
+    const rosterPrograms = [...new Set(rosterSample.map(r => r.program_id))].slice(0, 20);
+    res.json({
+      user_id:       u.id,
+      user_name:     u.name,
+      user_role:     u.role,
+      user_program_id: u.program_id,
+      programScope:  req.programScope,
+      programScopes: req.programScopes,
+      roster_program_ids_in_db: rosterPrograms,
+      match_check: req.programScopes
+        ? rosterPrograms.filter(p => req.programScopes.includes(p))
+        : rosterPrograms.filter(p => p === req.programScope),
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/reset-admin', async (req, res) => {
   try {
