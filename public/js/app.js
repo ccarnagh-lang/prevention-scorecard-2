@@ -24,24 +24,25 @@ const SupViews = {
       <span class="wpill">Week ending ${weekLabel}</span>
       <button class="btn btn-p btn-sm" onclick="App.nav('entry')">+ New entry</button>`);
 
-    const metrics = isDir
-      ? [['Program score', s.weekly!=null?Math.round(s.weekly)+'%':'—'],
-         ['Active cases',  d.totalCases||0],
-         ['Active children', d.totalChildren||0],
-         ['Safety flags',  d.safetyFlags||0],
-         ['FASP overdue',  d.faspOver||0]]
-      : [['Program score', s.weekly!=null?Math.round(s.weekly)+'%':'—'],
-         ['Cases on roster', d.totalCases||0],
-         ['Safety flags',   d.safetyFlags||0],
-         ['FASP overdue',   d.faspOver||0]];
+    const notSeenCount        = d.notSeenCount || 0;
+    const casesNotWeek        = d.casesNotReviewedWeek  || 0;
+    const casesNotMonth       = d.casesNotReviewedMonth || 0;
+
+    const kpi = (label, value, warn=false, critical=false) => `
+      <div style="text-align:center">
+        <div style="font-size:9px;color:rgba(255,255,255,.45);font-weight:600;margin-bottom:3px;line-height:1.3">${label}</div>
+        <div style="font-size:${value>99?'18':'22'}px;font-weight:700;color:${critical&&value>0?'#F09595':warn&&value>0?'#FAC775':'#fff'}">${value}</div>
+      </div>`;
 
     UI.setContent(`
-      <div style="background:#1B3A5C;border-radius:10px;padding:14px 18px;margin-bottom:18px;display:grid;grid-template-columns:repeat(${metrics.length},minmax(0,1fr));gap:8px">
-        ${metrics.map(([l,v],i)=>`
-          <div style="text-align:center">
-            <div style="font-size:10px;color:rgba(255,255,255,.45);font-weight:600;margin-bottom:4px">${l}</div>
-            <div style="font-size:22px;font-weight:700;color:${(l.includes('flag')||l.includes('Flag'))&&v>0?'#F09595':(l.includes('FASP'))&&v>0?'#FAC775':'#fff'}">${v}</div>
-          </div>`).join('')}
+      <div style="background:#1B3A5C;border-radius:10px;padding:12px 18px;margin-bottom:18px;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">
+        ${kpi('Program score', s.weekly!=null?Math.round(s.weekly)+'%':'—')}
+        ${kpi('Active cases', d.totalCases||0)}
+        ${kpi('Not reviewed<br>this week', casesNotWeek, false, casesNotWeek>0)}
+        ${kpi('Not reviewed<br>this month', casesNotMonth, false, casesNotMonth>0)}
+        ${kpi('Children not<br>seen this month', notSeenCount, false, notSeenCount>0)}
+        ${kpi('Safety flags', d.safetyFlags||0, false, (d.safetyFlags||0)>0)}
+        ${kpi('FASP overdue', d.faspOver||0, true)}
       </div>
 
       ${isDir ? `

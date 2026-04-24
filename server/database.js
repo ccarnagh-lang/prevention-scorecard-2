@@ -75,10 +75,24 @@ function calcAllScores(responses, childrenSeenThisMonth = null, childrenSeenAllM
 
   const w9  = responses.find(r => r.id === 'W9');
   const w10 = responses.find(r => r.id === 'W10');
-  const sf  = w9?.response === 'Yes' && (w10?.response === 'No' || w10?.response === 'Some but not all') ? 'Yes' : 'No';
+  const m1  = responses.find(r => r.id === 'M1');
+  const m2  = responses.find(r => r.id === 'M2');
+
+  // Safety flag triggers:
+  // 1. W9=Yes (safety concerns) AND W10=No/partial (no safety plan)
+  // 2. M1=Yes (child under 2 in home) AND M2=No (safe sleep not documented)
+  const sfSafety   = w9?.response === 'Yes' && (w10?.response === 'No' || w10?.response === 'Some but not all');
+  const sfSafeSleep = m1?.response === 'Yes' && m2?.response === 'No';
+  const sf = (sfSafety || sfSafeSleep) ? 'Yes' : 'No';
+
+  // Store flag reasons for display
+  const sfReasons = [];
+  if (sfSafety)    sfReasons.push('Safety concerns without safety plan (W9/W10)');
+  if (sfSafeSleep) sfReasons.push('Child under 2 — safe sleep not documented (M1/M2)');
+
   const q1  = responses.find(r => r.id === 'Q1');
   const fasp = q1?.response === 'Yes' ? 'Current' : q1?.response === 'No' ? 'Overdue' : 'Pending';
-  return { ws, ms, qs, ls, sf, fasp };
+  return { ws, ms, qs, ls, sf, sfReasons, fasp };
 }
 
 // Check if all children in a case have been seen >= 1x per month
@@ -581,8 +595,19 @@ module.exports = {
     if (dateTo)     { sql += ` AND week_ending<=$${params.push(dateTo)}`; }
     sql += ` ORDER BY created_at DESC LIMIT $${params.push(limit)}`;
     const rows = await query(sql, params);
+    // Enrich with case_name from roster
+    const caseIds = [...new Set(rows.map(r => r.case_id))];
+    let rosterMap = {};
+    if (caseIds.length > 0) {
+      const rosterRows = await query(
+        `SELECT case_id, case_name, agency FROM roster WHERE case_id = ANY($1)`,
+        [caseIds]
+      );
+      rosterRows.forEach(r => { rosterMap[r.case_id] = r; });
+    }
     return rows.map(e => ({
       ...e,
+      case_name: e.case_name || rosterMap[e.case_id]?.case_name || '',
       responses:     Array.isArray(e.responses)     ? e.responses     : JSON.parse(e.responses     || '[]'),
       children_seen: Array.isArray(e.children_seen) ? e.children_seen : JSON.parse(e.children_seen || '[]'),
     }));
@@ -608,7 +633,13 @@ module.exports = {
     } else if (programId) {
       outerWhere = ` AND e.program_id = $${outerParams.push(programId)}`;
     }
-    const sql = `SELECT e.* FROM entries e JOIN (SELECT case_id, MAX(id) as mid FROM entries${innerWhere} GROUP BY case_id) m ON e.id=m.mid${outerWhere} ORDER BY e.case_id`;
+    const sql = `
+      SELECT e.*, COALESCE(r.case_name, '') as case_name, r.agency, r.open_date as roster_open_date
+      FROM entries e
+      JOIN (SELECT case_id, MAX(id) as mid FROM entries${innerWhere} GROUP BY case_id) m ON e.id=m.mid
+      LEFT JOIN roster r ON r.case_id = e.case_id
+      ${outerWhere ? 'WHERE 1=1'+outerWhere : ''}
+      ORDER BY e.case_id`;
     const rows = await query(sql, outerParams);
     return rows.map(e => ({
       ...e,
@@ -650,38 +681,76 @@ module.exports = {
     const safetyFlags = parseInt((await buildEntryFilter("safety_flag='Yes'", pids, dateFrom, dateTo))?.c || 0);
     const faspOver    = parseInt((await buildEntryFilter("fasp_status='Overdue'", pids, dateFrom, dateTo))?.c || 0);
 
-    // Scores filtered by date range
-    const buildScoreQuery = (pids, we, dateFrom, dateTo) => {
-      const params = [we];
-      let sql = `SELECT
-        ROUND(AVG(CASE WHEN week_ending=$1 THEN weekly_score END))::int as weekly,
-        ROUND(AVG(weekly_score))::int as weekly_avg,
-        ROUND(AVG(monthly_score))::int as monthly,
-        ROUND(AVG(quarterly_score))::int as quarterly,
-        ROUND(AVG(lifetime_score))::int as lifetime
-        FROM entries WHERE 1=1`;
-      if (pids)     sql += ` AND program_id = ANY($${params.push(pids)})`;
-      if (dateFrom) sql += ` AND week_ending >= $${params.push(dateFrom)}`;
-      if (dateTo)   sql += ` AND week_ending <= $${params.push(dateTo)}`;
-      return queryOne(sql, params);
-    };
-    const scoresRow = await buildScoreQuery(pids, we, dateFrom, dateTo) || {};
-
-    // By planner filtered by date range
-    const buildPlannerQuery = (pids, dateFrom, dateTo) => {
+    // Scores: average across all active roster cases
+    // Cases with no entries count as 0 — this gives true compliance rate
+    const buildScoreQuery = async (pids, we, dateFrom, dateTo, plannerNamesArg) => {
+      // Get latest entry per case (null for cases with no entries)
       const params = [];
-      let sql = `SELECT case_planner,
-        ROUND(AVG(weekly_score))::int as ws, ROUND(AVG(monthly_score))::int as ms,
-        ROUND(AVG(quarterly_score))::int as qs, ROUND(AVG(lifetime_score))::int as ls,
-        COUNT(*) as entries
-        FROM entries WHERE case_planner IS NOT NULL`;
-      if (pids)     sql += ` AND program_id = ANY($${params.push(pids)})`;
-      if (dateFrom) sql += ` AND week_ending >= $${params.push(dateFrom)}`;
-      if (dateTo)   sql += ` AND week_ending <= $${params.push(dateTo)}`;
-      sql += ' GROUP BY case_planner ORDER BY case_planner';
-      return query(sql, params);
+      let rosterFilter = ' WHERE r.active=true';
+      if (plannerNamesArg && plannerNamesArg.length > 0) {
+        rosterFilter += ` AND r.planner_name = ANY($${params.push(plannerNamesArg)})`;
+      } else if (pids) {
+        rosterFilter += ` AND r.program_id = ANY($${params.push(pids)})`;
+      }
+
+      let entryFilter = '1=1';
+      const eParams = [...params];
+      if (dateFrom) entryFilter += ` AND e.week_ending >= $${eParams.push(dateFrom)}`;
+      if (dateTo)   entryFilter += ` AND e.week_ending <= $${eParams.push(dateTo)}`;
+
+      // Average scores across all roster cases — missing entries = 0
+      const sql = `
+        SELECT
+          ROUND(AVG(COALESCE(latest.weekly_score, 0)))::int as weekly,
+          ROUND(AVG(COALESCE(latest.weekly_score, 0)))::int as weekly_avg,
+          ROUND(AVG(COALESCE(latest.monthly_score, 0)))::int as monthly,
+          ROUND(AVG(COALESCE(latest.quarterly_score, 0)))::int as quarterly,
+          ROUND(AVG(COALESCE(latest.lifetime_score, 0)))::int as lifetime
+        FROM roster r
+        LEFT JOIN LATERAL (
+          SELECT weekly_score, monthly_score, quarterly_score, lifetime_score
+          FROM entries e
+          WHERE e.case_id = r.case_id AND ${entryFilter}
+          ORDER BY e.created_at DESC LIMIT 1
+        ) latest ON true
+        ${rosterFilter}`;
+
+      return queryOne(sql, eParams);
     };
-    const byPlanner = await buildPlannerQuery(pids, dateFrom, dateTo);
+    const scoresRow = await buildScoreQuery(pids, we, dateFrom, dateTo, usePlanners ? plannerNames : null) || {};
+
+    // By planner — include planner names from roster even if no entries submitted
+    const buildPlannerQuery = async (pids, dateFrom, dateTo, plannerNamesArg) => {
+      const params = [];
+      let rosterFilter = ' WHERE r.active=true AND r.planner_name IS NOT NULL';
+      if (plannerNamesArg && plannerNamesArg.length > 0) {
+        rosterFilter += ` AND r.planner_name = ANY($${params.push(plannerNamesArg)})`;
+      } else if (pids) {
+        rosterFilter += ` AND r.program_id = ANY($${params.push(pids)})`;
+      }
+      let entryFilter = '1=1';
+      const eParams = [...params];
+      if (dateFrom) entryFilter += ` AND e.week_ending >= $${eParams.push(dateFrom)}`;
+      if (dateTo)   entryFilter += ` AND e.week_ending <= $${eParams.push(dateTo)}`;
+
+      const sql = `
+        SELECT
+          r.planner_name as case_planner,
+          COUNT(DISTINCT r.case_id)::int as cases,
+          COUNT(DISTINCT e.id)::int as entries,
+          ROUND(AVG(COALESCE(e.weekly_score, 0)))::int as ws,
+          ROUND(AVG(COALESCE(e.monthly_score, 0)))::int as ms,
+          ROUND(AVG(COALESCE(e.quarterly_score, 0)))::int as qs,
+          ROUND(AVG(COALESCE(e.lifetime_score, 0)))::int as ls
+        FROM roster r
+        LEFT JOIN entries e ON e.case_id = r.case_id AND ${entryFilter}
+        ${rosterFilter}
+        GROUP BY r.planner_name
+        ORDER BY r.planner_name`;
+
+      return query(sql, eParams);
+    };
+    const byPlanner = await buildPlannerQuery(pids, dateFrom, dateTo, usePlanners ? plannerNames : null);
 
     // Case scores — latest entry per case filtered by date range
     const caseScores  = await this.getLatestPerCase(programId, programIds, dateFrom, dateTo);
@@ -698,9 +767,54 @@ module.exports = {
       pids ? [pids] : []
     ) || {};
 
+    // Cases not reviewed this week — roster cases with no entry for current ISO week
+    const thisWeekStart = new Date();
+    thisWeekStart.setDate(thisWeekStart.getDate() - thisWeekStart.getDay() + 1); // Monday
+    const weekStr = thisWeekStart.toISOString().slice(0,10);
+
+    // Cases not reviewed this month
+    const thisMonth = new Date().toISOString().slice(0,7); // YYYY-MM
+
+    const buildReviewFilter = (plannerNamesArg, pids) => {
+      const p = [];
+      let f = ' WHERE r.active=true';
+      if (plannerNamesArg && plannerNamesArg.length > 0) {
+        f += ` AND r.planner_name = ANY($${p.push(plannerNamesArg)})`;
+      } else if (pids) {
+        f += ` AND r.program_id = ANY($${p.push(pids)})`;
+      }
+      return { f, p };
+    };
+
+    const { f: rFilterW, p: rParamsW } = buildReviewFilter(usePlanners ? plannerNames : null, pids);
+    const { f: rFilterM, p: rParamsM } = buildReviewFilter(usePlanners ? plannerNames : null, pids);
+
+    const notReviewedWeekResult = await queryOne(`
+      SELECT COUNT(*) as c FROM roster r
+      WHERE NOT EXISTS (
+        SELECT 1 FROM entries e
+        WHERE e.case_id = r.case_id
+        AND e.week_ending >= '${weekStr}'
+      )${rFilterW.replace(' WHERE r.active=true', ' AND r.active=true')}`,
+      rParamsW
+    );
+    const notReviewedMonthResult = await queryOne(`
+      SELECT COUNT(*) as c FROM roster r
+      WHERE NOT EXISTS (
+        SELECT 1 FROM entries e
+        WHERE e.case_id = r.case_id
+        AND e.week_ending LIKE '${thisMonth}%'
+      )${rFilterM.replace(' WHERE r.active=true', ' AND r.active=true')}`,
+      rParamsM
+    );
+
+    const casesNotReviewedWeek  = parseInt(notReviewedWeekResult?.c  || 0);
+    const casesNotReviewedMonth = parseInt(notReviewedMonthResult?.c || 0);
+
     return {
       totalCases, safetyFlags, faspOver, totalChildren,
       notSeenCount: notSeenThisWeek.length, nonCompliantMonthly,
+      casesNotReviewedWeek, casesNotReviewedMonth,
       scores: scoresRow || {}, byPlanner, caseScores, trend, programs,
       notSeenThisWeek: notSeenThisWeek.slice(0, 20),
       dateRange, dateFrom, dateTo,
@@ -799,6 +913,13 @@ module.exports = {
 
   async getPlannerNamesForDirector(directorId) {
     return getPlannerNamesForDirector(directorId);
+  },
+
+  async getStaffForSupervisor(supervisorId) {
+    return query(
+      `SELECT name FROM users WHERE supervisor_id=$1 AND active=true`,
+      [supervisorId]
+    );
   },
 
   async logAction(userId, userName, action, entityType, entityId, detail) {

@@ -345,6 +345,11 @@ const SharedViews = {
     const w9    = resp.find(r => r.id === 'W9')  || {};
     const w10   = resp.find(r => r.id === 'W10') || {};
     const w11   = resp.find(r => r.id === 'W11') || {};
+    const m1    = resp.find(r => r.id === 'M1')  || {};
+    const m2    = resp.find(r => r.id === 'M2')  || {};
+
+    const sfSafety    = w9.response === 'Yes' && (w10.response === 'No' || w10.response === 'Some but not all');
+    const sfSafeSleep = m1.response === 'Yes' && m2.response === 'No';
 
     UI.modal(`
       <div class="modal-title">⚠ Safety flag — ${caseId}</div>
@@ -353,35 +358,52 @@ const SharedViews = {
         Submitted by: <strong>${flagged.submitted_name||flagged.case_planner||'—'}</strong>
       </div>
 
-      <div style="padding:12px;border-radius:8px;background:#FFF3F3;border-left:4px solid #A32D2D;margin-bottom:14px">
-        <div style="font-size:11px;font-weight:700;color:#A32D2D;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Safety concerns reported</div>
-
+      ${sfSafety ? `
+      <div style="padding:12px;border-radius:8px;background:#FFF3F3;border-left:4px solid #A32D2D;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:#A32D2D;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">⚠ Safety concerns — W9/W10</div>
         <div style="margin-bottom:10px">
           <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W9 — Safety concerns raised</div>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:${w9.response==='Yes'?'#FCEBEB':'#EAF3DE'};color:${w9.response==='Yes'?'#791F1F':'#27500A'}">${w9.response||'—'}</span>
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#FCEBEB;color:#791F1F">${w9.response||'—'}</span>
             ${w9.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w9.notes}</span>`:''}
           </div>
         </div>
-
-        <div style="margin-bottom:10px">
-          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W10 — Safety plan documented when concerns raised</div>
+        <div style="margin-bottom:6px">
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W10 — Safety plan documented</div>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:${w10.response==='Yes'?'#EAF3DE':w10.response==='No'?'#FCEBEB':'#FAEEDA'};color:${w10.response==='Yes'?'#27500A':w10.response==='No'?'#791F1F':'#633806'}">${w10.response||'—'}</span>
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:${w10.response==='No'?'#FCEBEB':'#FAEEDA'};color:${w10.response==='No'?'#791F1F':'#633806'}">${w10.response||'—'}</span>
             ${w10.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w10.notes}</span>`:''}
           </div>
-          ${w10.response==='No'?'<div style="font-size:11px;color:#A32D2D;margin-top:5px;font-weight:600">⚠ Safety concerns were raised but no safety plan was documented — immediate action required.</div>':''}
-          ${w10.response==='Some but not all'?'<div style="font-size:11px;color:#BA7517;margin-top:5px;font-weight:600">⚠ Safety plan partially documented — follow up needed.</div>':''}
-        </div>
-
-        ${w11.response?`<div style="margin-bottom:6px">
-          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W11 — Risk level raised</div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#FAEEDA;color:#633806">${w11.response}</span>
-            ${w11.notes?`<span style="font-size:12px;color:#555;font-style:italic">${w11.notes}</span>`:''}
+          <div style="font-size:11px;color:#A32D2D;margin-top:5px;font-weight:600">
+            ${w10.response==='No'?'⚠ No safety plan documented — immediate action required.':'⚠ Safety plan only partially documented — follow up needed.'}
           </div>
+        </div>
+        ${w11.response?`<div>
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">W11 — Risk level raised</div>
+          <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#FAEEDA;color:#633806">${w11.response}</span>
+          ${w11.notes?`<span style="font-size:12px;color:#555;font-style:italic;margin-left:8px">${w11.notes}</span>`:''}
         </div>`:''}
-      </div>
+      </div>` : ''}
+
+      ${sfSafeSleep ? `
+      <div style="padding:12px;border-radius:8px;background:#FFF8F0;border-left:4px solid #E07A00;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:#E07A00;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">🛏 Safe sleep concern — M1/M2</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">M1 — Child under 2 years old in the home</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#EAF3DE;color:#27500A">${m1.response||'—'}</span>
+            ${m1.notes?`<span style="font-size:12px;color:#555;font-style:italic">${m1.notes}</span>`:''}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:#333;margin-bottom:3px">M2 — Safe sleep practices documented</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#FCEBEB;color:#791F1F">${m2.response||'—'}</span>
+            ${m2.notes?`<span style="font-size:12px;color:#555;font-style:italic">${m2.notes}</span>`:''}
+          </div>
+          <div style="font-size:11px;color:#E07A00;margin-top:5px;font-weight:600">⚠ Child under 2 in home but safe sleep not documented — review required.</div>
+        </div>
+      </div>` : ''}
 
       ${flagged.submission_notes?`<div style="font-size:12px;color:#555;padding:10px;background:#F8F9FB;border-radius:6px;margin-bottom:10px"><strong>Submission notes:</strong> ${flagged.submission_notes}</div>`:''}
 

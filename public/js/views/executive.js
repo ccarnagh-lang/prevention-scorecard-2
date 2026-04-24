@@ -75,10 +75,12 @@ const ExecViews = {
         Showing: <strong style="color:#1B3A5C">${dateLabel}</strong>
         ${dr.earliest?` &nbsp;|&nbsp; Earliest data: <strong>${dr.earliest}</strong>`:''}
       </div>
-      <div class="metric-grid" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+      <div class="metric-grid" style="grid-template-columns:repeat(7,minmax(0,1fr))">
         <div class="mc"><div class="mc-label">Avg weekly score</div><div class="mc-value" style="color:${UI.scoreColor(avgWs)}">${avgWs!=null?avgWs+'%':'—'}</div><div class="mc-sub">${progs.length||'All'} programs</div></div>
         <div class="mc"><div class="mc-label">Active cases</div><div class="mc-value">${totalCases}</div><div class="mc-sub">All programs</div></div>
-        <div class="mc"><div class="mc-label">Active children</div><div class="mc-value" style="color:#1B3A5C">${totalChildren}</div><div class="mc-sub">In roster</div></div>
+        <div class="mc"><div class="mc-label">Not reviewed this week</div><div class="mc-value" style="color:${(d.casesNotReviewedWeek||0)>0?'#A32D2D':'#0F6E56'}">${d.casesNotReviewedWeek||0}</div><div class="mc-sub">No entry this week</div></div>
+        <div class="mc"><div class="mc-label">Not reviewed this month</div><div class="mc-value" style="color:${(d.casesNotReviewedMonth||0)>0?'#BA7517':'#0F6E56'}">${d.casesNotReviewedMonth||0}</div><div class="mc-sub">No entry this month</div></div>
+        <div class="mc"><div class="mc-label">Children not seen</div><div class="mc-value" style="color:${(d.notSeenCount||0)>0?'#A32D2D':'#0F6E56'}">${d.notSeenCount||0}</div><div class="mc-sub">This month</div></div>
         <div class="mc"><div class="mc-label">Safety flags</div><div class="mc-value" style="color:#A32D2D">${totalFlags}</div><div class="mc-sub">${dateLabel}</div></div>
         <div class="mc"><div class="mc-label">FASP overdue</div><div class="mc-value" style="color:#BA7517">${totalFasp}</div><div class="mc-sub">${dateLabel}</div></div>
       </div>
