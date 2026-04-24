@@ -6,11 +6,25 @@ const SharedViews = {
     UI.setTopbar(`<span class="wpill">Week ending ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>`);
     const cases = roster || await API.get('/api/roster') || [];
 
+    // Check if launched from case list — pre-fill case details
+    const preCaseId      = sessionStorage.getItem('entry_case_id')      || '';
+    const preCaseName    = sessionStorage.getItem('entry_case_name')    || '';
+    const preCasePlanner = sessionStorage.getItem('entry_case_planner') || '';
+    const preProgId      = sessionStorage.getItem('entry_program_id')   || '';
+    sessionStorage.removeItem('entry_case_id');
+    sessionStorage.removeItem('entry_case_name');
+    sessionStorage.removeItem('entry_case_planner');
+    sessionStorage.removeItem('entry_program_id');
+
+    // Default week ending to this Friday
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const daysToFriday = dayOfWeek <= 5 ? 5 - dayOfWeek : 6;
+    const friday = new Date(today);
+    friday.setDate(today.getDate() + daysToFriday);
+    const defaultWeek = friday.toISOString().slice(0,10);
+
     const buildRows = reqs => reqs.map(r => UI.buildReqRow(r)).join('');
-    const buildSection = reqs =>
-      Object.entries(reqs).map(([key,items]) =>
-        `<div class="req-sec-hdr">${key.charAt(0).toUpperCase()+key.slice(1)}</div>` + buildRows(items)
-      ).join('');
 
     UI.setContent(`
       <div class="score-strip">
@@ -21,20 +35,22 @@ const SharedViews = {
       </div>
 
       <div class="form-card">
-        <div class="fc-title">Case identification</div>
+        <div class="fc-title">Case identification
+          ${preCaseId?`<span class="badge badge-green" style="margin-left:8px">${preCaseName||preCaseId}</span>`:''}
+        </div>
         <div class="grid-3">
           <div class="field"><label>Case ID (CNNX)</label>
             <select id="f-case" onchange="SharedViews.entryAutoFill(this)">
               <option value="">— Select case —</option>
-              ${cases.map(c=>`<option value="${c.case_id}" data-pl="${c.planner_name||''}" data-hh="${c.household_id||''}" data-ch="${c.children_count||0}" data-name="${c.case_name||''}">${c.case_id}${c.case_name?' — '+c.case_name:''}</option>`).join('')}
+              ${cases.map(c=>`<option value="${c.case_id}" data-pl="${c.planner_name||''}" data-hh="${c.household_id||''}" data-ch="${c.children_count||0}" data-name="${c.case_name||''}" ${c.case_id===preCaseId?'selected':''}>${c.case_id}${c.case_name?' — '+c.case_name:''}</option>`).join('')}
             </select></div>
           <div class="field"><label>Case planner</label>
             <select id="f-planner">
-              ${[...new Set(cases.map(c=>c.planner_name).filter(Boolean))].map(p=>`<option>${p}</option>`).join('')}
+              ${[...new Set(cases.map(c=>c.planner_name).filter(Boolean))].map(p=>`<option ${p===preCasePlanner?'selected':''}>${p}</option>`).join('')}
             </select></div>
-          <div class="field"><label>Week ending</label><input type="date" id="f-week"></div>
+          <div class="field"><label>Week ending</label><input type="date" id="f-week" value="${defaultWeek}"></div>
           <div class="field"><label>Household ID</label><input type="text" id="f-hh" placeholder="HH-####"></div>
-          <div class="field"><label>Case name (HOH)</label><input type="text" id="f-casename" placeholder="Last, First"></div>
+          <div class="field"><label>Case name (HOH)</label><input type="text" id="f-casename" placeholder="Last, First" value="${preCaseName}"></div>
           <div class="field"><label>Submission notes</label><input type="text" id="f-notes" placeholder="Optional..."></div>
         </div>
       </div>
@@ -413,6 +429,24 @@ const SharedViews = {
       </div>`, () => {});
   },
 
+  launchEntryForCaseById(caseId) {
+    // Look up case details from cached case data
+    const caseData = (SharedViews._caseData||[]).find(e => e.case_id === caseId) || {};
+    sessionStorage.setItem('entry_case_id',      caseId);
+    sessionStorage.setItem('entry_case_name',    caseData.case_name    || '');
+    sessionStorage.setItem('entry_case_planner', caseData.case_planner || '');
+    sessionStorage.setItem('entry_program_id',   caseData.program_id   || '');
+    App.nav('entry');
+  },
+
+  launchEntryForCase(caseId, caseName, casePlanner, programId) {
+    sessionStorage.setItem('entry_case_id',      caseId);
+    sessionStorage.setItem('entry_case_name',    caseName   || '');
+    sessionStorage.setItem('entry_case_planner', casePlanner|| '');
+    sessionStorage.setItem('entry_program_id',   programId  || '');
+    App.nav('entry');
+  },
+
   openCaseReview(caseId) {
     sessionStorage.setItem('sn_case', caseId);
     App.nav('supnote');
@@ -449,7 +483,9 @@ const SharedViews = {
               ? `<a href="#" onclick="event.preventDefault();SharedViews.openCaseReview('${e.case_id}')" style="color:#1B3A5C;text-decoration:underline;cursor:pointer" title="Click to open monthly supervisory review">${e.case_id}</a>`
               : e.case_id}
           </td>
-          <td style="font-size:12px">${e.case_name||'—'}</td>
+          <td style="font-size:12px">${['supervisor','program_director','admin','executive'].includes(Auth.user?.role)
+            ? `<a href="#" onclick="event.preventDefault();SharedViews.launchEntryForCaseById('${e.case_id}')" style="color:#1B3A5C;font-weight:600;text-decoration:underline;cursor:pointer" title="Click to open new entry for this case">${e.case_name||e.case_id||'—'}</a>`
+            : (e.case_name||'—')}</td>
           <td style="font-size:11px;color:#888">${e.program_id||'—'}${e.manually_assigned?' <span class="badge badge-amber" style="font-size:9px">🔒</span>':''}</td>
           <td>${e.case_planner||'—'}</td>
           <td style="text-align:center">

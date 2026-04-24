@@ -29,9 +29,9 @@ const SupViews = {
     const casesNotMonth       = d.casesNotReviewedMonth || 0;
 
     const kpi = (label, value, warn=false, critical=false) => `
-      <div style="text-align:center">
-        <div style="font-size:9px;color:rgba(255,255,255,.45);font-weight:600;margin-bottom:3px;line-height:1.3">${label}</div>
-        <div style="font-size:${value>99?'18':'22'}px;font-weight:700;color:${critical&&value>0?'#F09595':warn&&value>0?'#FAC775':'#fff'}">${value}</div>
+      <div style="text-align:center;padding:4px 2px">
+        <div style="font-size:11px;color:rgba(255,255,255,.6);font-weight:600;margin-bottom:5px;line-height:1.4;letter-spacing:0.01em">${label}</div>
+        <div style="font-size:${value>99?'18':'24'}px;font-weight:700;color:${critical&&value>0?'#F09595':warn&&value>0?'#FAC775':'#fff'}">${value}</div>
       </div>`;
 
     UI.setContent(`
