@@ -1045,6 +1045,7 @@ const SharedViews = {
   async renderSupnote(programId) {
     UI.setTitle('Monthly Supervisory Note');
     const roster  = await API.get('/api/roster?active=false'+(programId?`&program_id=${programId}`:''))||[];
+    SharedViews._snRoster = roster;
     const preCase = sessionStorage.getItem('sn_case')||'';
     sessionStorage.removeItem('sn_case');
 
@@ -1053,11 +1054,12 @@ const SharedViews = {
     const monthVal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
 
     UI.setTopbar(`
-      <select id="sn-case" onchange="SharedViews.refreshNote()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px;min-width:200px">
+      <select id="sn-case" onchange="SharedViews.onCaseOrMonthChange()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px;min-width:200px">
         <option value="">— Select case —</option>
         ${roster.map(r=>`<option value="${r.case_id}" ${r.case_id===preCase?'selected':''}>${r.case_id}${r.case_name?' — '+r.case_name:''}</option>`).join('')}
       </select>
-      <input type="month" id="sn-month" value="${monthVal}" onchange="SharedViews.refreshNote()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+      <input type="month" id="sn-month" value="${monthVal}" onchange="SharedViews.onCaseOrMonthChange()" style="font-size:12px;padding:5px 9px;border:1px solid var(--mgray);border-radius:6px">
+      <button class="btn btn-p btn-sm" onclick="SharedViews.saveNote()">💾 Save note</button>
       <button class="btn btn-pu btn-sm" onclick="SharedViews.exportNote()">Export .docx</button>
       <button class="btn btn-sm" onclick="window.print()">Print PDF</button>`);
 
@@ -1075,17 +1077,21 @@ const SharedViews = {
                 <button class="disc-btn no" id="disc-no"  onclick="SharedViews.setDischarge(false)">Not ready</button>
                 <button class="disc-btn"    id="disc-yes" onclick="SharedViews.setDischarge(true)">Ready</button>
               </div>
-              <div class="field" style="margin-bottom:10px"><label>Discharge notes</label><textarea id="sn-disc" rows="3" oninput="SharedViews.refreshNote()"></textarea></div>
+              <div class="field" style="margin-bottom:10px"><label>Discharge notes <span style="color:#A32D2D">*</span></label><textarea id="sn-disc" rows="3" oninput="SharedViews.refreshNote()"></textarea></div>
+              <div class="field" style="margin-bottom:10px"><label>Safety plan to address safety concerns</label><textarea id="sn-safety" rows="3" oninput="SharedViews.refreshNote()" placeholder="Optional — only if safety concerns were identified"></textarea></div>
             </div>
-            <div class="field" style="margin-bottom:10px"><label>Supervisor narrative</label><textarea id="sn-narr" rows="5" oninput="SharedViews.refreshNote()"></textarea></div>
+            <div class="field" style="margin-bottom:10px"><label>Supervisor narrative <span style="color:#A32D2D">*</span></label><textarea id="sn-narr" rows="5" oninput="SharedViews.refreshNote()"></textarea></div>
+            <div class="field" style="margin-bottom:10px"><label>Recommendations to Case Planner <span style="color:#A32D2D">*</span></label><textarea id="sn-rec" rows="4" oninput="SharedViews.refreshNote()"></textarea></div>
             <div style="border-top:1px solid #F0F2F5;padding-top:12px">
               <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">E-signature</div>
               <div class="field"><label>Type full name to sign</label><input type="text" id="sn-sig" placeholder="${Auth.user?.name||'Your name'}" oninput="SharedViews.refreshNote()" style="font-style:italic;font-size:14px"></div>
             </div>
           </div>
+          <button class="btn btn-p btn-block" style="padding:11px;font-size:13px;margin-bottom:7px" onclick="SharedViews.saveNote()">💾 Save note</button>
           <button class="btn btn-pu btn-block" style="padding:11px;font-size:13px;margin-bottom:7px" onclick="SharedViews.exportNote()">Export as Word (.docx)</button>
           <button class="btn btn-block" style="padding:10px;font-size:12px;margin-bottom:7px" onclick="window.print()">Print / Save as PDF</button>
           <button class="btn btn-block" style="padding:9px;font-size:12px" onclick="SharedViews.refreshNote()">Refresh preview</button>
+          <div id="np-save-status" style="font-size:10px;color:#aaa;text-align:center;margin-top:4px">No saved note yet for this case/month</div>
         </div>
         <div style="background:#fff;border:1px solid #E8ECF0;border-radius:10px;overflow:hidden">
           <div style="background:#1B3A5C;padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
@@ -1109,7 +1115,7 @@ const SharedViews = {
         </div>
       </div>`);
 
-    if (preCase) await this.refreshNote();
+    if (preCase) await this.onCaseOrMonthChange();
   },
 
   setDischarge(val) {
@@ -1117,6 +1123,81 @@ const SharedViews = {
     document.getElementById('disc-yes').className='disc-btn'+(val?' yes':'');
     document.getElementById('disc-no').className='disc-btn'+(val?''  :' no');
     this.refreshNote();
+  },
+
+  async onCaseOrMonthChange() {
+    await this.loadSupervisoryNote();
+    await this.refreshNote();
+  },
+
+  async loadSupervisoryNote() {
+    const caseId   = document.getElementById('sn-case')?.value;
+    const monthVal = document.getElementById('sn-month')?.value;
+    const statusEl = document.getElementById('np-save-status');
+    if (!caseId || !monthVal) return;
+    try {
+      const note = await API.get(`/api/supervisory-note?case_id=${encodeURIComponent(caseId)}&month=${encodeURIComponent(monthVal)}`);
+      SharedViews._savedNote = note || null;
+      const disc=document.getElementById('sn-disc'), narr=document.getElementById('sn-narr'),
+            rec=document.getElementById('sn-rec'), safety=document.getElementById('sn-safety'),
+            sig=document.getElementById('sn-sig'), lic=document.getElementById('sn-lic'), title=document.getElementById('sn-title');
+      if (note) {
+        if (disc)   disc.value   = note.discharge_notes || '';
+        if (narr)   narr.value   = note.supervisor_narrative || '';
+        if (rec)    rec.value    = note.recommendations_case_planner || '';
+        if (safety) safety.value = note.safety_plan || '';
+        if (sig)    sig.value    = note.signature || '';
+        if (lic)    lic.value    = note.supervisor_license || '';
+        if (title)  title.value  = note.supervisor_title || 'Program Supervisor — Prevention Services';
+        SharedViews._discharge = !!note.discharge_ready;
+        document.getElementById('disc-yes').className = 'disc-btn'+(SharedViews._discharge?' yes':'');
+        document.getElementById('disc-no').className   = 'disc-btn'+(SharedViews._discharge?''  :' no');
+        const who  = note.last_edited_by_name || note.created_by_name || '—';
+        const when = (note.last_edited_at || note.created_at || '').slice(0,10);
+        if (statusEl) statusEl.textContent = `Last saved by ${who} on ${when}`;
+      } else {
+        [disc,narr,rec,safety,sig].forEach(el => { if (el) el.value=''; });
+        SharedViews._discharge = false;
+        document.getElementById('disc-yes')?.classList.remove('yes');
+        document.getElementById('disc-no')?.classList.add('no');
+        if (statusEl) statusEl.textContent = 'No saved note yet for this case/month';
+      }
+    } catch(e) { console.warn('[loadSupervisoryNote]', e.message); }
+  },
+
+  async saveNote() {
+    const caseId   = document.getElementById('sn-case')?.value;
+    const monthVal = document.getElementById('sn-month')?.value;
+    if (!caseId)   { UI.toast('Please select a case first','error'); return; }
+    if (!monthVal) { UI.toast('Please select a month first','error'); return; }
+
+    const discharge_notes              = document.getElementById('sn-disc')?.value?.trim();
+    const supervisor_narrative         = document.getElementById('sn-narr')?.value?.trim();
+    const recommendations_case_planner = document.getElementById('sn-rec')?.value?.trim();
+    const safety_plan                  = document.getElementById('sn-safety')?.value?.trim();
+
+    const missing = [];
+    if (!discharge_notes)              missing.push('Discharge notes');
+    if (!supervisor_narrative)         missing.push('Supervisor narrative');
+    if (!recommendations_case_planner) missing.push('Recommendations to Case Planner');
+    if (missing.length) { UI.toast('Required to save:\n• ' + missing.join('\n• '), 'error'); return; }
+
+    const rc = (SharedViews._snRoster||[]).find(r => r.case_id === caseId);
+    try {
+      await API.post('/api/supervisory-note', {
+        case_id: caseId, month: monthVal,
+        program_id: rc?.program_id || Auth.user?.program_id || '',
+        supervisor_name:    document.getElementById('sn-sup')?.value||'',
+        supervisor_license: document.getElementById('sn-lic')?.value||'',
+        supervisor_title:   document.getElementById('sn-title')?.value||'',
+        discharge_ready:    SharedViews._discharge||false,
+        discharge_notes, supervisor_narrative, recommendations_case_planner, safety_plan,
+        signature:          document.getElementById('sn-sig')?.value||'',
+        signature_date:     new Date().toISOString().slice(0,10),
+      });
+      UI.toast('Supervisory note saved','success');
+      await this.loadSupervisoryNote();
+    } catch(e) { UI.toast('Save failed: '+e.message,'error'); }
   },
 
   async refreshNote() {
@@ -1161,8 +1242,10 @@ const SharedViews = {
     const names   = REQS.nameMap();
     const sup     = document.getElementById('sn-sup')?.value || Auth.user?.name || '';
     const sig     = document.getElementById('sn-sig')?.value || '';
-    const narr    = document.getElementById('sn-narr')?.value || '';
-    const disc    = document.getElementById('sn-disc')?.value || '';
+    const narr       = document.getElementById('sn-narr')?.value || '';
+    const disc       = document.getElementById('sn-disc')?.value || '';
+    const rec        = document.getElementById('sn-rec')?.value || '';
+    const safetyPlan = document.getElementById('sn-safety')?.value || '';
     const dr      = SharedViews._discharge || false;
     const today   = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const sc      = avgWeekly || 0;
@@ -1296,6 +1379,12 @@ const SharedViews = {
       <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Supervisor narrative</div>
       <div style="font-size:12px;color:#333;font-style:italic;line-height:1.6;padding:10px 12px;background:#F8F9FB;border-radius:6px;margin-bottom:12px">${narr||'No narrative entered.'}</div>
 
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Recommendations to Case Planner</div>
+      <div style="font-size:12px;color:#333;font-style:italic;line-height:1.6;padding:10px 12px;background:#F8F9FB;border-radius:6px;margin-bottom:12px">${rec||'No recommendations entered.'}</div>
+
+      <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid #0F6E56">Safety Plan to Address Safety Concerns</div>
+      <div style="font-size:12px;color:#333;font-style:italic;line-height:1.6;padding:10px 12px;background:#F8F9FB;border-radius:6px;margin-bottom:12px">${safetyPlan||'No safety plan entered — not applicable or no safety concerns identified.'}</div>
+
       <div style="font-size:11px;font-weight:700;color:#0F6E56;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;padding-bottom:4px;border-bottom:2px solid #0F6E56">E-signature</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         ${[['Supervisor signature',sig||''],['Date',today],['Printed name',sup||''],['License',document.getElementById('sn-lic')?.value||''],['Case planner acknowledgment',''],['Date acknowledged','']].map(([l,v])=>`
@@ -1319,9 +1408,11 @@ const SharedViews = {
     const missingFields = [];
     const narr = document.getElementById('sn-narr')?.value?.trim();
     const disc = document.getElementById('sn-disc')?.value?.trim();
+    const rec  = document.getElementById('sn-rec')?.value?.trim();
     const sig  = document.getElementById('sn-sig')?.value?.trim();
     if (!narr) missingFields.push('Supervisor narrative');
     if (!disc) missingFields.push('Discharge notes');
+    if (!rec)  missingFields.push('Recommendations to Case Planner');
     if (!sig)  missingFields.push('E-signature (type your full name)');
 
     if (missingFields.length > 0) {
@@ -1347,6 +1438,8 @@ const SharedViews = {
         narrative:       document.getElementById('sn-narr')?.value||'',
         dischargeReady:  SharedViews._discharge||false,
         dischargeNotes:  document.getElementById('sn-disc')?.value||'',
+        recommendationsCasePlanner: document.getElementById('sn-rec')?.value||'',
+        safetyPlan:      document.getElementById('sn-safety')?.value||'',
         signature:       document.getElementById('sn-sig')?.value||'',
         signatureDate:   new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),
       },`Supervisory_Note_${caseId}_${new Date().toISOString().slice(0,10)}.docx`);

@@ -149,6 +149,7 @@ async function generateSupNote(data) {
   const {
     caseId, supervisorName, supervisorLicense, supervisorTitle,
     narrative, dischargeReady, dischargeNotes, signature, signatureDate,
+    recommendationsCasePlanner, safetyPlan,
     roster, latest, entries,
   } = data;
 
@@ -310,6 +311,13 @@ async function generateSupNote(data) {
         }),
 
         sp(80),
+        secTitle('Safety Plan to Address Safety Concerns'),
+        new Paragraph({ spacing:{ before:60, after:80 },
+          border:{ top:bdr(MGRAY), bottom:bdr(MGRAY), left:bdr(MGRAY), right:bdr(MGRAY) },
+          children:[new TextRun({ text:safetyPlan||'No safety plan entered — not applicable or no safety concerns identified.', size:18, font:'Arial', color:'222222', italics:true })]
+        }),
+
+        sp(80),
         secTitle('Discharge Readiness'),
         new Table({
           width:{ size:9000, type:WidthType.DXA }, columnWidths:[1800,7200],
@@ -338,6 +346,14 @@ async function generateSupNote(data) {
           border:{ top:bdr(MGRAY), bottom:bdr(MGRAY), left:bdr(MGRAY), right:bdr(MGRAY) },
           children:[new TextRun({ text:narrative||'No narrative provided.', size:18, font:'Arial', color:'222222', italics:true })]
         }),
+
+        sp(80),
+        secTitle('Recommendations to Case Planner'),
+        new Paragraph({ spacing:{ before:60, after:80 },
+          border:{ top:bdr(MGRAY), bottom:bdr(MGRAY), left:bdr(MGRAY), right:bdr(MGRAY) },
+          children:[new TextRun({ text:recommendationsCasePlanner||'No recommendations provided.', size:18, font:'Arial', color:'222222', italics:true })]
+        }),
+
         sp(80),
         secTitle('E-Signature'),
         new Paragraph({ spacing:{ before:60, after:40 },

@@ -880,6 +880,37 @@ module.exports = {
     await query("UPDATE supervision_log SET resolved=true,status='Resolved',resolved_at=NOW() WHERE id=$1", [id]);
   },
 
+  async getSupervisoryNote(caseId, month) {
+    return queryOne('SELECT * FROM supervisory_notes WHERE case_id=$1 AND month=$2', [caseId, month]);
+  },
+
+  async saveSupervisoryNote(data, userId, userName) {
+    const isUpdate = !!(await queryOne(
+      'SELECT id FROM supervisory_notes WHERE case_id=$1 AND month=$2', [data.case_id, data.month]
+    ));
+    await query(
+      `INSERT INTO supervisory_notes
+        (case_id, month, program_id, supervisor_name, supervisor_license, supervisor_title,
+         discharge_ready, discharge_notes, supervisor_narrative, recommendations_case_planner,
+         safety_plan, signature, signature_date, created_by, created_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (case_id, month) DO UPDATE SET
+         program_id=$3, supervisor_name=$4, supervisor_license=$5, supervisor_title=$6,
+         discharge_ready=$7, discharge_notes=$8, supervisor_narrative=$9, recommendations_case_planner=$10,
+         safety_plan=$11, signature=$12, signature_date=$13,
+         last_edited_by=$14, last_edited_by_name=$15, last_edited_at=NOW()`,
+      [data.case_id, data.month, data.program_id||'', data.supervisor_name||'', data.supervisor_license||'',
+       data.supervisor_title||'', data.discharge_ready||false, data.discharge_notes||'', data.supervisor_narrative||'',
+       data.recommendations_case_planner||'', data.safety_plan||'', data.signature||'', data.signature_date||'',
+       userId, userName]
+    );
+    await this.logAction(
+      userId, userName, isUpdate ? 'edit_supervisory_note' : 'create_supervisory_note',
+      'supervisory_note', `${data.case_id}_${data.month}`,
+      `${isUpdate?'Edited':'Created'} monthly supervisory note for ${data.case_id} (${data.month})`
+    );
+  },
+
   async getStaff(programId, programIds, callerRole, callerId) {
     // Scope direct reports by role:
     // supervisor   → staff where supervisor_id = caller id

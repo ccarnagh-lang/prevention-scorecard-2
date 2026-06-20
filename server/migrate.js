@@ -157,6 +157,31 @@ async function migrate() {
       )`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS supervisory_notes (
+        id                            SERIAL PRIMARY KEY,
+        case_id                       TEXT NOT NULL,
+        month                         TEXT NOT NULL,
+        program_id                    TEXT,
+        supervisor_name               TEXT,
+        supervisor_license            TEXT,
+        supervisor_title              TEXT,
+        discharge_ready               BOOLEAN DEFAULT false,
+        discharge_notes               TEXT,
+        supervisor_narrative          TEXT,
+        recommendations_case_planner  TEXT,
+        safety_plan                   TEXT,
+        signature                     TEXT,
+        signature_date                TEXT,
+        created_by                    INTEGER,
+        created_by_name               TEXT,
+        created_at                    TIMESTAMPTZ DEFAULT NOW(),
+        last_edited_by                INTEGER,
+        last_edited_by_name           TEXT,
+        last_edited_at                TIMESTAMPTZ,
+        UNIQUE(case_id, month)
+      )`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         sid    TEXT PRIMARY KEY,
         sess   JSONB NOT NULL,

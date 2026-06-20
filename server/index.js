@@ -343,6 +343,25 @@ app.get('/api/export/children-compliance', requireAuth, scopeProgram, async (req
     res.send(csv);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+app.get('/api/supervisory-note', requireAuth, async (req, res) => {
+  try {
+    const { case_id, month } = req.query;
+    if (!case_id || !month) return res.status(400).json({ error: 'case_id and month are required' });
+    res.json(await db.getSupervisoryNote(case_id, month));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/supervisory-note', requireAuth, requireRole('executive','admin','program_director','supervisor'), async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data.case_id || !data.month) return res.status(400).json({ error: 'case_id and month are required' });
+    if (!data.discharge_notes?.trim() || !data.supervisor_narrative?.trim() || !data.recommendations_case_planner?.trim()) {
+      return res.status(400).json({ error: 'Discharge notes, Supervisor narrative, and Recommendations to Case Planner are required.' });
+    }
+    await db.saveSupervisoryNote(data, req.session.user.id, req.session.user.name);
+    res.json({ success: true });
+  } catch(e) { res.status(400).json({ error: e.message }); }
+});
+
 app.post('/api/export/supervisory-note', requireAuth, async (req, res) => {
   try {
     const { caseId, ...opts } = req.body;
