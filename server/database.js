@@ -102,7 +102,6 @@ async function checkChildrenLifetimeCompliance(caseId, weekEnding) {
     // Get case open date
    const roster = await queryOne('SELECT open_date FROM roster WHERE case_id=$1', [caseId]);
 const startDate = roster?.open_date;
-    const startDate = roster?.open_date || roster?.added_date;
     if (!startDate) return null; // Unknown — don't penalize
 
     const start   = new Date(startDate);
