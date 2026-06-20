@@ -100,7 +100,8 @@ function calcAllScores(responses, childrenSeenThisMonth = null, childrenSeenAllM
 async function checkChildrenLifetimeCompliance(caseId, weekEnding) {
   try {
     // Get case open date
-    const roster = await queryOne('SELECT open_date, added_date FROM roster WHERE case_id=$1', [caseId]);
+   const roster = await queryOne('SELECT open_date FROM roster WHERE case_id=$1', [caseId]);
+const startDate = roster?.open_date;
     const startDate = roster?.open_date || roster?.added_date;
     if (!startDate) return null; // Unknown — don't penalize
 
